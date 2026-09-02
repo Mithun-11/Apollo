@@ -28,11 +28,17 @@ Correct, visible signal processing matters more than production infrastructure o
 
 ## Current state
 
-- Stage 0 scaffolding is complete.
-- The repository has pinned Python and npm environments, CI, and one dependency smoke test.
+- Stage 0 scaffolding and the Stage 1 Python teacher demo are complete.
+- The repository has pinned Python and npm environments, CI, dependency smoke coverage,
+  and synthetic signal/demo tests.
+- The reusable signal service loads and normalizes audio, extracts spectral peaks, creates
+  deterministic fingerprints, and matches songs by time-offset voting.
+- The local demo fingerprints ignored catalog audio, reads a user-supplied clip from
+  `demo-clip/`, and saves the waveform, spectrogram, peak, constellation, and vote visualizations.
 - The Next.js frontend is only the generated empty page.
-- No signal algorithm, FastAPI routes, Supabase project, database schema, migration, storage bucket, or frontend API client exists yet.
-- The next implementation milestone is the Stage 1 Python teacher demo. It must work without FastAPI, Supabase, or the frontend.
+- No FastAPI routes, Supabase project, database schema, migration, storage bucket, or
+  frontend API client exists yet.
+- The next implementation milestone is the Stage 2 reliable signal core.
 
 Never describe a planned file, endpoint, table, or feature as already implemented.
 
