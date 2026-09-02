@@ -30,6 +30,8 @@ frontend/.env.local
 # Local audio and generated demo output
 demo-data/*
 !demo-data/README.md
+demo-clip/*
+!demo-clip/README.md
 artifacts/
 *.wav
 *.mp3
