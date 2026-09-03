@@ -21,6 +21,11 @@ from .services.signal import (
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".ogg", ".wav"}
 
 
+def format_timestamp(timestamp_seconds: float) -> str:
+    minutes, seconds = divmod(round(timestamp_seconds), 60)
+    return f"{minutes} min {seconds} sec"
+
+
 def run_demo(
     song_paths: Sequence[Path],
     query_path: Path,
@@ -153,7 +158,7 @@ def main() -> None:
     )
     print(f"Query clip: {query_path.name}")
     print(f"Predicted song: {result.song_id}")
-    print(f"Estimated timestamp: {result.timestamp_seconds:.2f} seconds")
+    print(f"Estimated timestamp: {format_timestamp(result.timestamp_seconds)}")
     print(f"Aligned fingerprint votes: {result.match_count}")
     print(f"Plots saved to: {args.output.resolve()}")
 

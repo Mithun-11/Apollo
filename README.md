@@ -48,6 +48,15 @@ The virtual environment is local and must never be committed.
 ## Stage 1 signal demo
 
 Place at least two full songs in `demo-data/` and your short query clips in `demo-clip/`.
+To create a clip from a full song, run this from `backend/`:
+
+```bash
+python -m app.create_clip "Cold.wav" 60 8
+```
+
+This extracts 8 seconds starting at 60 seconds and writes `clip_1.wav` to `demo-clip/`.
+Later clips become `clip_2.wav`, `clip_3.wav`, and so on.
+
 Then run the demo from `backend/`, passing only the clip filename:
 
 ```bash

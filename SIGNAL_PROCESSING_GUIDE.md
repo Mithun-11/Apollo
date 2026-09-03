@@ -478,7 +478,7 @@ The output has this form:
 ```text
 Query clip: cold-sample.wav
 Predicted song: Cold
-Estimated timestamp: 60.00 seconds
+Estimated timestamp: 1 min 0 sec
 Aligned fingerprint votes: 10525
 Plots saved to: .../Apollo/artifacts/stage1
 ```
