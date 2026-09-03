@@ -3,8 +3,12 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from app.demo import run_demo
+from app.demo import format_timestamp, run_demo
 from app.services.signal import SignalConfig
+
+
+def test_format_timestamp_uses_minutes_and_seconds() -> None:
+    assert format_timestamp(199.99) == "3 min 20 sec"
 
 
 def test_demo_matches_an_external_clip_and_saves_explanatory_plots(tmp_path: Path) -> None:
