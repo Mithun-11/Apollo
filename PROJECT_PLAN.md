@@ -36,7 +36,7 @@ Build in this order so failures can be localized to the signal algorithm, databa
 
 ## 3. Project and GitHub foundation
 
-The actual repository root will be `Apollo/`. This plan remains outside that folder as a reference document.
+The repository root is `Apollo/`, and this plan is tracked at its root.
 
 - Create one private GitHub repository and add both developers as collaborators.
 - Protect `main`: use short-lived branches and pull requests, require one review from the other developer, resolved comments, and passing CI. Do not force-push to `main`.
@@ -201,11 +201,10 @@ If the initial demo mixes all work into one notebook cell or script with global 
 
 ## 8. Assumptions and deferred work
 
-- Apollo is greenfield and `Apollo/` is currently empty.
+- Stages 0 and 1 are complete. Stage 2 is the next implementation milestone and has not started.
 - The database and schema will be created in Stage 3.
 - The project is a supervised university demonstration, not a public production service.
 - Authentication is intentionally omitted. If management endpoints become publicly reachable, authentication becomes a required new stage.
 - One shared development Supabase project is sufficient for two developers.
 - Do not commit copyrighted catalog audio; keep it in private Supabase Storage or ignored local folders.
 - Deferred until a demonstrated need: ORM, Alembic, Docker, Redis, Celery, FFmpeg, direct PostgreSQL drivers, background workers, production deployment, and hum search.
-

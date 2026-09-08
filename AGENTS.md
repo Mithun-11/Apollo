@@ -4,7 +4,8 @@ This file is the persistent onboarding context for coding agents working in this
 
 ## Start every task here
 
-1. Read the relevant section of `PROJECT_PLAN.md` and all of `CONSTRAINTS.md`.
+1. Read `Current state` below as the authoritative progress marker, then read the relevant
+   section of `PROJECT_PLAN.md` and all of `CONSTRAINTS.md`.
 2. Inspect the files involved, their tests, and one existing comparable pattern before editing.
 3. State any assumption that would affect behavior, API shape, signal parameters, schema, or scope.
 4. Make the smallest complete change and run the relevant checks below.
@@ -28,7 +29,8 @@ Correct, visible signal processing matters more than production infrastructure o
 
 ## Current state
 
-- Stage 0 scaffolding and the Stage 1 Python teacher demo are complete.
+- **Current implementation boundary:** Stages 0 and 1 are complete; Stage 2 is next and has
+  not started.
 - The repository has pinned Python and npm environments, CI, dependency smoke coverage,
   and synthetic signal/demo tests.
 - The reusable signal service loads and normalizes audio, extracts spectral peaks, creates
@@ -38,7 +40,9 @@ Correct, visible signal processing matters more than production infrastructure o
 - The Next.js frontend is only the generated empty page.
 - No FastAPI routes, Supabase project, database schema, migration, storage bucket, or
   frontend API client exists yet.
-- The next implementation milestone is the Stage 2 reliable signal core.
+
+Update this section in the same change that completes a stage or materially changes which
+subsystems exist. Do not infer project progress from the roadmap alone.
 
 Never describe a planned file, endpoint, table, or feature as already implemented.
 
@@ -183,3 +187,16 @@ Never:
 - Do not mix dependency upgrades, formatting sweeps, refactors, and behavior changes in one pull request.
 - Do not overwrite or discard another developer's uncommitted work.
 - Never force-push shared branches.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

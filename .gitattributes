@@ -8,3 +8,4 @@
 *.flac binary
 *.ogg binary
 
+graphify-out/graph.json merge=graphify
