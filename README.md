@@ -6,6 +6,12 @@ See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the staged roadmap,
 [SIGNAL_PROCESSING_GUIDE.md](SIGNAL_PROCESSING_GUIDE.md) for the Stage 1 theory and implementation,
 and [CONSTRAINTS.md](CONSTRAINTS.md) for the project-wide quality rules.
 
+## Project status
+
+Stages 0 and 1 are complete. Stage 2, the reliable signal core, is next and has not started.
+The `Current state` section in [AGENTS.md](AGENTS.md) is the authoritative progress marker and
+must be updated whenever a stage or major subsystem is completed.
+
 ## Required versions
 
 - Python 3.13.11
@@ -93,3 +99,16 @@ npm audit --audit-level=high
 ## Git workflow
 
 Work on short-lived `feature/*`, `fix/*`, or `chore/*` branches. Open a pull request into `main`, let CI pass on Windows and macOS, and have the other developer review it. Do not commit generated output, secrets, dependency folders, or local environments.
+
+## Graphify setup
+
+Graphify data is local and ignored by Git. After installing Graphify, initialize each clone and
+enable automatic code-index refreshes:
+
+```bash
+graphify extract . --code-only
+graphify hook install
+```
+
+The hooks refresh code changes after commits and checkouts. `AGENTS.md`, not the local graph, remains
+the source of truth for the current project stage.
