@@ -36,7 +36,8 @@ is already beyond the original teacher-demo stages.
 - The repository has pinned Python and npm environments, CI, dependency smoke coverage,
   and synthetic signal/demo tests.
 - The reusable signal service loads and normalizes audio, extracts spectral peaks, creates
-  deterministic fingerprints with transient traces, and matches songs by time-offset voting.
+  deterministic fingerprints with transient traces, matches songs by time-offset voting, and
+  rejects weak or ambiguous winners using absolute, normalized-support, and runner-up gates.
 - The explanation service creates bounded waveform, spectrogram, peak, alignment, and vote data
   without changing recognition or persisted fingerprints.
 - The local demo fingerprints ignored catalog audio, reads a user-supplied clip from

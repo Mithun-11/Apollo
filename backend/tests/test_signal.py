@@ -6,6 +6,7 @@ import soundfile as sf
 
 from app.services.signal import (
     DEFAULT_CONFIG,
+    Fingerprint,
     FingerprintTrace,
     Peak,
     SignalConfig,
@@ -143,3 +144,122 @@ def test_match_fingerprints_returns_song_and_source_timestamp() -> None:
     assert result.offset_frame == 240
     assert result.timestamp_seconds == pytest.approx(3.0)
     assert result.match_count >= config.match_threshold
+
+
+def test_match_fingerprints_rejects_weak_query_support() -> None:
+    config = SignalConfig(
+        match_threshold=5,
+        min_match_ratio=0.2,
+        min_winner_ratio=1.0,
+    )
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=index, version=config.fingerprint_version)
+        for index in range(100)
+    )
+    catalog = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + 50,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query[:10]
+    )
+
+    assert match_fingerprints(query, {"accidental-song": catalog}, config) is None
+
+
+def test_match_fingerprints_rejects_votes_below_absolute_threshold() -> None:
+    config = SignalConfig(
+        match_threshold=6,
+        min_match_ratio=0.0,
+        min_winner_ratio=1.0,
+    )
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=index, version=config.fingerprint_version)
+        for index in range(5)
+    )
+    catalog = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + 50,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query
+    )
+
+    assert match_fingerprints(query, {"weak-song": catalog}, config) is None
+
+
+def test_match_fingerprints_rejects_ambiguous_competing_song() -> None:
+    config = SignalConfig(
+        match_threshold=5,
+        min_match_ratio=0.0,
+        min_winner_ratio=1.5,
+    )
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=index, version=config.fingerprint_version)
+        for index in range(10)
+    )
+    narrow_winner = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + 100,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query
+    )
+    close_runner_up = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + 200,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query[:8]
+    )
+
+    assert (
+        match_fingerprints(
+            query,
+            {"narrow-winner": narrow_winner, "close-runner-up": close_runner_up},
+            config,
+        )
+        is None
+    )
+
+
+def test_match_fingerprints_accepts_clear_winner() -> None:
+    config = SignalConfig(
+        match_threshold=5,
+        min_match_ratio=0.5,
+        min_winner_ratio=1.5,
+    )
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=index, version=config.fingerprint_version)
+        for index in range(10)
+    )
+    clear_winner = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + 100,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query
+    )
+    runner_up = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + 200,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query[:5]
+    )
+
+    result = match_fingerprints(
+        query,
+        {"clear-winner": clear_winner, "runner-up": runner_up},
+        config,
+    )
+
+    assert result is not None
+    assert result.song_id == "clear-winner"
+    assert result.match_count == 10

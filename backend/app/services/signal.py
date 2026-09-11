@@ -26,7 +26,9 @@ class SignalConfig:
     fan_out: int = 10
     min_time_delta_frames: int = 1
     max_time_delta_frames: int = 200
-    match_threshold: int = 5
+    match_threshold: int = 10
+    min_match_ratio: float = 0.01
+    min_winner_ratio: float = 1.5
     fingerprint_version: str = "1"
 
 
@@ -212,6 +214,21 @@ def match_fingerprints(
         key=lambda item: (-item[1], item[0][0], abs(item[0][1]), item[0][1]),
     )
     if match_count < config.match_threshold:
+        return None
+
+    match_ratio = match_count / len(query)
+    if match_ratio < config.min_match_ratio:
+        return None
+
+    runner_up_match_count = max(
+        (
+            count
+            for (candidate, _), count in votes.items()
+            if candidate != song_id
+        ),
+        default=0,
+    )
+    if match_count < runner_up_match_count * config.min_winner_ratio:
         return None
 
     offset_votes = tuple(

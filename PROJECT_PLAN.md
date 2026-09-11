@@ -113,6 +113,9 @@ Acceptance: the excerpt matches its source song and the estimated timestamp is w
 - Support WAV, MP3, FLAC, and OGG through the pinned `soundfile`/librosa stack and verify each format on Windows and macOS.
 - Keep all calibration parameters together and attach `fingerprintVersion` to generated fingerprints so incompatible configurations cannot be mixed.
 - Add no-match behavior and a normalized confidence score based on aligned fingerprint votes.
+- Reject weak or ambiguous winners using all three acceptance signals: a minimum aligned-vote
+  count, a minimum winning-vote/query-fingerprint ratio, and separation from the strongest
+  competing song. These decision thresholds do not change persisted fingerprint hashes.
 - Create a 10–25 song evaluation catalog.
 - Require correct matching for clean excerpts. Measure 3/5/10-second clips, amplitude changes, and several noise levels; record the first results as a regression baseline instead of inventing an accuracy target beforehand.
 
