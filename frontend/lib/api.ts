@@ -77,6 +77,7 @@ export type RecognitionExplanationResponse = {
 };
 
 type ApiError = { error?: { message?: string } };
+const RECOGNITION_TIMEOUT_MS = 60_000;
 
 async function postAudio<T>(
   endpoint: string,
@@ -85,12 +86,27 @@ async function postAudio<T>(
 ): Promise<T> {
   const form = new FormData();
   form.append("audio", audio, "microphone.wav");
-  const response = await fetch(endpoint, { method: "POST", body: form });
-  const body = (await response.json()) as T & ApiError;
-  if (!response.ok) {
-    throw new Error(body.error?.message ?? fallbackMessage);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), RECOGNITION_TIMEOUT_MS);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      body: form,
+      signal: controller.signal,
+    });
+    const body = (await response.json()) as T & ApiError;
+    if (!response.ok) {
+      throw new Error(body.error?.message ?? fallbackMessage);
+    }
+    return body;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Recognition took too long. Please try a shorter recording.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-  return body;
 }
 
 export async function recognizeAudio(audio: Blob): Promise<RecognitionResponse> {

@@ -11,12 +11,11 @@ from uuid import uuid4
 from supabase import Client
 
 from .services.explanation import (
-    build_matched_fingerprint_display,
     build_offset_vote_display,
     build_peak_display,
     build_spectrogram_display,
     build_waveform_envelope,
-    select_winning_traces,
+    build_winning_fingerprint_evidence,
 )
 from .services.signal import (
     DEFAULT_CONFIG,
@@ -217,14 +216,13 @@ def recognize_file_with_explanation(
     else:
         song = _fetch_song(result.song_id, client)
         recognition = _recognition_response(result, len(analysis.fingerprints), song)
-        winning_traces = tuple(
-            select_winning_traces(
-                analysis.traces,
-                catalog.get(result.song_id, []),
-                result.offset_frame,
-                config,
-            )
+        winning_evidence = build_winning_fingerprint_evidence(
+            analysis.traces,
+            catalog.get(result.song_id, []),
+            result.offset_frame,
+            config,
         )
+        winning_traces = winning_evidence.traces
         matched_fingerprints = [
             {
                 "queryAnchorSeconds": match.query_anchor_seconds,
@@ -234,12 +232,7 @@ def recognize_file_with_explanation(
                 "anchorFrequencyHz": match.anchor_frequency_hz,
                 "targetFrequencyHz": match.target_frequency_hz,
             }
-            for match in build_matched_fingerprint_display(
-                analysis.traces,
-                catalog.get(result.song_id, []),
-                result.offset_frame,
-                config,
-            )
+            for match in winning_evidence.matched_fingerprints
         ]
         offset_votes = [
             {

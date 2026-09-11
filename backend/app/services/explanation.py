@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -64,6 +65,12 @@ class OffsetVoteDisplay:
     offset_seconds: float
     count: int
     winning: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WinningFingerprintEvidence:
+    traces: tuple[FingerprintTrace, ...]
+    matched_fingerprints: tuple[MatchedFingerprintDisplay, ...]
 
 
 def build_waveform_envelope(
@@ -192,12 +199,37 @@ def build_matched_fingerprint_display(
     if max_matches <= 0:
         raise ValueError("Maximum displayed fingerprint matches must be positive")
 
+    return list(
+        build_winning_fingerprint_evidence(
+            traces,
+            catalog_fingerprints,
+            winning_offset_frame,
+            config,
+            max_matches=max_matches,
+        ).matched_fingerprints
+    )
+
+
+def build_winning_fingerprint_evidence(
+    traces: Sequence[FingerprintTrace],
+    catalog_fingerprints: Sequence[Fingerprint],
+    winning_offset_frame: int,
+    config: SignalConfig = DEFAULT_CONFIG,
+    *,
+    max_matches: int = MAX_DISPLAY_MATCHES,
+) -> WinningFingerprintEvidence:
+    """Build winning traces and bounded alignment lines in one indexed pass."""
+    if max_matches <= 0:
+        raise ValueError("Maximum displayed fingerprint matches must be positive")
+
     frame_seconds = config.hop_length / config.sample_rate
     frequency_hz_per_bin = config.sample_rate / config.n_fft
     unique_matches: dict[tuple[int, int, int, int, int], MatchedFingerprintDisplay] = {}
+    selected_traces: dict[FingerprintTrace, None] = {}
     for trace, catalog_fingerprint in _winning_pairs(
         traces, catalog_fingerprints, winning_offset_frame, config
     ):
+        selected_traces.setdefault(trace, None)
         query_fingerprint = trace.fingerprint
         delta_frames = trace.target_frame - query_fingerprint.anchor_frame
         source_target_frame = catalog_fingerprint.anchor_frame + delta_frames
@@ -221,7 +253,10 @@ def build_matched_fingerprint_display(
     ordered = [
         match for _, match in sorted(unique_matches.items(), key=lambda item: item[0])
     ]
-    return _sample_evenly(ordered, max_matches)
+    return WinningFingerprintEvidence(
+        traces=tuple(selected_traces),
+        matched_fingerprints=tuple(_sample_evenly(ordered, max_matches)),
+    )
 
 
 def select_winning_traces(
@@ -231,12 +266,14 @@ def select_winning_traces(
     config: SignalConfig = DEFAULT_CONFIG,
 ) -> list[FingerprintTrace]:
     """Return query traces that contribute to the winning catalog alignment."""
-    selected: dict[FingerprintTrace, None] = {}
-    for trace, _ in _winning_pairs(
-        traces, catalog_fingerprints, winning_offset_frame, config
-    ):
-        selected.setdefault(trace, None)
-    return list(selected)
+    return list(
+        build_winning_fingerprint_evidence(
+            traces,
+            catalog_fingerprints,
+            winning_offset_frame,
+            config,
+        ).traces
+    )
 
 
 def _winning_pairs(
@@ -245,16 +282,17 @@ def _winning_pairs(
     winning_offset_frame: int,
     config: SignalConfig,
 ) -> list[tuple[FingerprintTrace, Fingerprint]]:
+    catalog_by_hash: defaultdict[str, list[Fingerprint]] = defaultdict(list)
+    for catalog_fingerprint in catalog_fingerprints:
+        if catalog_fingerprint.version == config.fingerprint_version:
+            catalog_by_hash[catalog_fingerprint.hash_value].append(catalog_fingerprint)
+
     pairs: list[tuple[FingerprintTrace, Fingerprint]] = []
     for trace in traces:
         query_fingerprint = trace.fingerprint
         if query_fingerprint.version != config.fingerprint_version:
             continue
-        for catalog_fingerprint in catalog_fingerprints:
-            if catalog_fingerprint.version != config.fingerprint_version:
-                continue
-            if catalog_fingerprint.hash_value != query_fingerprint.hash_value:
-                continue
+        for catalog_fingerprint in catalog_by_hash.get(query_fingerprint.hash_value, ()):
             source_offset = catalog_fingerprint.anchor_frame - query_fingerprint.anchor_frame
             if source_offset != winning_offset_frame:
                 continue

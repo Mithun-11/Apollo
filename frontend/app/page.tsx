@@ -38,6 +38,7 @@ type RecordingSession = {
   recordingTimerId: number | null;
   countdownTimerId: number | null;
   cleaned: boolean;
+  _countdownTick?: number;
 };
 
 function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
@@ -102,6 +103,7 @@ export default function Home() {
   const busy = useRef(false);
 
   useEffect(() => {
+    unmounted.current = false; // Reset on every (re)mount — React Strict Mode runs cleanup + remount in dev.
     return () => {
       unmounted.current = true;
       const session = sessionRef.current;
@@ -204,19 +206,28 @@ export default function Home() {
         };
         session!.recordingTimerId = window.setTimeout(session!.finish, RECORDING_SECONDS * 1000);
         session!.countdownTimerId = window.setInterval(() => {
+          const currentSession = sessionRef.current;
+          if (!currentSession) return;
           setState((current) => {
             if (current.phase !== "recording") return current;
             const next = Math.max(0, current.secondsRemaining - 1);
             return { phase: "recording", secondsRemaining: next };
           });
+          // Call finish() outside the updater to avoid side effects in a pure function.
+          // Access secondsRemaining from state via a functional approach isn't reliable here,
+          // so we track elapsed ticks independently.
+          currentSession._countdownTick = (currentSession._countdownTick ?? RECORDING_SECONDS) - 1;
+          if (currentSession._countdownTick <= 0) {
+            currentSession.finish();
+          }
         }, 1000);
       });
 
       if (unmounted.current) return;
       const sampleRate = session.context.sampleRate;
+      setState({ phase: "processing" });
       await cleanupRecordingSession(session);
       sessionRef.current = null;
-      setState({ phase: "processing" });
       const recording = encodeWav(recordedChunks, sampleRate);
       replacePlaybackUrl(recording);
       const response = await recognizeAudioWithExplanation(recording);
@@ -267,8 +278,13 @@ export default function Home() {
         <p className="eyebrow">APOLLO</p>
         <h1 id="title">What’s playing?</h1>
         <p className="subtitle">Listen to a nearby recording and find its Spotify track.</p>
-        <button type="button" onClick={listen} disabled={isBusy}>
-          {state.phase === "recording" ? "Recording…" : "Listen"}
+        <button
+          type="button"
+          onClick={listen}
+          disabled={isBusy}
+          className={state.phase === "recording" ? "btn-recording" : ""}
+        >
+          {state.phase === "recording" ? "⏺ Recording…" : "🎙 Listen"}
         </button>
         {state.phase === "recording" ? (
           <button className="secondary-button" type="button" onClick={stopRecording}>

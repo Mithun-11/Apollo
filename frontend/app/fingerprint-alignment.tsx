@@ -4,12 +4,22 @@ import type { MatchedFingerprintDisplay } from "../lib/api";
 
 const MAX_RENDERED_MATCHES = 300;
 
-function clamp(value: number): number {
-  return Math.max(0, Math.min(1, value));
+const VW = 900;
+const VH = 400;
+const LEFT   = 70;
+const RIGHT  = 18;
+const PW     = VW - LEFT - RIGHT;
+
+// Two timeline y-positions
+const QUERY_Y  = 120;
+const SONG_Y   = 280;
+
+function clamp(v: number): number {
+  return Math.max(0, Math.min(1, v));
 }
 
-function formatSeconds(value: number): string {
-  return `${value.toFixed(2)} s`;
+function fmt(v: number): string {
+  return `${v.toFixed(2)} s`;
 }
 
 export default function FingerprintAlignment({
@@ -21,76 +31,133 @@ export default function FingerprintAlignment({
   queryDurationSeconds: number;
   sourceInterval: { startSeconds: number; endSeconds: number } | null;
 }) {
-  const visibleMatches = matches.slice(0, MAX_RENDERED_MATCHES);
+  const visible = matches.slice(0, MAX_RENDERED_MATCHES);
   const queryDuration = queryDurationSeconds || 1;
-  const sourceStart = sourceInterval?.startSeconds ?? 0;
-  const sourceDuration = sourceInterval
-    ? Math.max(sourceInterval.endSeconds - sourceInterval.startSeconds, queryDuration)
-    : queryDuration;
+  const sourceStart   = sourceInterval?.startSeconds ?? 0;
+  const sourceEnd     = sourceInterval?.endSeconds   ?? queryDuration;
+  const sourceDuration = Math.max(sourceEnd - sourceStart, queryDuration);
+
+  // Sub-tick counts
+  const tickCount = 6;
+
+  if (!sourceInterval || visible.length === 0) {
+    return (
+      <div>
+        <p className="empty-chart">No accepted fingerprint alignment is available.</p>
+        <p className="chart-caption">The source-side timeline stays blank when Apollo has no accepted match.</p>
+      </div>
+    );
+  }
 
   return (
     <div>
-      {sourceInterval && visibleMatches.length > 0 ? (
-        <svg
-          className="alignment-plot"
-          viewBox="0 0 100 92"
-          role="img"
-          aria-label="Matched fingerprints aligned between query and source timelines"
-        >
-          <rect x="0" y="0" width="100" height="92" fill="#0b1020" rx="2" />
-          <line x1="12" y1="26" x2="96" y2="26" stroke="#737373" />
-          <line x1="12" y1="66" x2="96" y2="66" stroke="#737373" />
-          {visibleMatches.map((match, index) => {
-            const queryX = 12 + clamp(match.queryAnchorSeconds / queryDuration) * 84;
-            const sourceX =
-              12 + clamp((match.sourceAnchorSeconds - sourceStart) / sourceDuration) * 84;
-            return (
-              <g key={`${match.queryAnchorSeconds}-${match.sourceAnchorSeconds}-${index}`}>
-                <line
-                  x1={queryX}
-                  y1="26"
-                  x2={sourceX}
-                  y2="66"
-                  stroke="#facc15"
-                  strokeOpacity="0.55"
-                  strokeWidth="0.25"
-                />
-                <circle cx={queryX} cy="26" r="0.7" fill="#67e8f9" />
-                <circle cx={sourceX} cy="66" r="0.7" fill="#facc15" />
-              </g>
-            );
-          })}
-          <text x="1" y="27" fill="#d4d4d4" fontSize="3.4">Query</text>
-          <text x="1" y="67" fill="#d4d4d4" fontSize="3.4">Song</text>
-          <text x="12" y="20" fill="#a3a3a3" fontSize="3">0 s</text>
-          <text x="87" y="20" fill="#a3a3a3" fontSize="3">
-            {formatSeconds(queryDurationSeconds)}
-          </text>
-          <text x="12" y="80" fill="#a3a3a3" fontSize="3">
-            {formatSeconds(sourceInterval.startSeconds)}
-          </text>
-          <text x="83" y="80" fill="#a3a3a3" fontSize="3">
-            {formatSeconds(sourceInterval.endSeconds)}
-          </text>
-        </svg>
-      ) : (
-        <p className="empty-chart">No accepted fingerprint alignment is available.</p>
-      )}
+      <svg
+        className="alignment-plot"
+        viewBox={`0 0 ${VW} ${VH}`}
+        role="img"
+        aria-label="Matched fingerprints aligned between query and source song timelines"
+      >
+        {/* White background */}
+        <rect x="0" y="0" width={VW} height={VH} fill="#ffffff" rx="4" />
+
+        {/* ── Section labels ─────────────────────────────────── */}
+        <text x={LEFT - 8} y={QUERY_Y - 30} fill="#374151" fontSize="13" fontWeight="700" textAnchor="end">
+          Query
+        </text>
+        <text x={LEFT - 8} y={SONG_Y - 30} fill="#374151" fontSize="13" fontWeight="700" textAnchor="end">
+          Song
+        </text>
+
+        {/* ── Query timeline band ─────────────────────────────── */}
+        <rect x={LEFT} y={QUERY_Y - 14} width={PW} height={28}
+          fill="#eff6ff" stroke="#bfdbfe" strokeWidth="1.5" rx="6" />
+        <text x={LEFT} y={QUERY_Y + 34} fill="#6b7280" fontSize="11" textAnchor="start">0 s</text>
+        <text x={LEFT + PW} y={QUERY_Y + 34} fill="#6b7280" fontSize="11" textAnchor="end">
+          {fmt(queryDurationSeconds)}
+        </text>
+
+        {/* ── Song timeline band ──────────────────────────────── */}
+        <rect x={LEFT} y={SONG_Y - 14} width={PW} height={28}
+          fill="#fef3c7" stroke="#fcd34d" strokeWidth="1.5" rx="6" />
+        <text x={LEFT} y={SONG_Y + 34} fill="#6b7280" fontSize="11" textAnchor="start">
+          {fmt(sourceStart)}
+        </text>
+        <text x={LEFT + PW} y={SONG_Y + 34} fill="#6b7280" fontSize="11" textAnchor="end">
+          {fmt(sourceEnd)}
+        </text>
+
+        {/* ── Grid lines / ticks on both timelines ────────────── */}
+        {Array.from({ length: tickCount - 1 }, (_, i) => {
+          const frac = (i + 1) / tickCount;
+          const qx = LEFT + frac * PW;
+          const sx = LEFT + frac * PW;
+          return (
+            <g key={`tick-${i}`}>
+              <line x1={qx} y1={QUERY_Y - 14} x2={qx} y2={QUERY_Y + 14}
+                stroke="#bfdbfe" strokeWidth="0.8" />
+              <line x1={sx} y1={SONG_Y - 14} x2={sx} y2={SONG_Y + 14}
+                stroke="#fcd34d" strokeWidth="0.8" />
+            </g>
+          );
+        })}
+
+        {/* ── Connector lines (drawn beneath markers) ─────────── */}
+        {visible.map((match, i) => {
+          const qx = LEFT + clamp(match.queryAnchorSeconds / queryDuration) * PW;
+          const sx = LEFT + clamp((match.sourceAnchorSeconds - sourceStart) / sourceDuration) * PW;
+          return (
+            <line
+              key={`line-${i}`}
+              x1={qx} y1={QUERY_Y + 14}
+              x2={sx} y2={SONG_Y - 14}
+              stroke="#f59e0b"
+              strokeOpacity="0.25"
+              strokeWidth="1"
+            />
+          );
+        })}
+
+        {/* ── Query markers ───────────────────────────────────── */}
+        {visible.map((match, i) => {
+          const qx = LEFT + clamp(match.queryAnchorSeconds / queryDuration) * PW;
+          return (
+            <circle key={`qm-${i}`} cx={qx} cy={QUERY_Y} r="4"
+              fill="#3b82f6" fillOpacity="0.85" />
+          );
+        })}
+
+        {/* ── Song markers ────────────────────────────────────── */}
+        {visible.map((match, i) => {
+          const sx = LEFT + clamp((match.sourceAnchorSeconds - sourceStart) / sourceDuration) * PW;
+          return (
+            <circle key={`sm-${i}`} cx={sx} cy={SONG_Y} r="4"
+              fill="#d97706" fillOpacity="0.85" />
+          );
+        })}
+
+        {/* ── Axis title ──────────────────────────────────────── */}
+        <text x={VW / 2} y={VH - 6} fill="#9ca3af" fontSize="11" textAnchor="middle">
+          Time axis — Query: 0 … {fmt(queryDurationSeconds)} · Song: {fmt(sourceStart)} … {fmt(sourceEnd)}
+        </text>
+      </svg>
+
       <p className="chart-caption">
-        {visibleMatches.length > 0
-          ? `${visibleMatches.length} matched fingerprint lines shown; the source timeline contains matched evidence only.`
-          : "The source-side timeline stays blank when Apollo has no accepted match."}
+        {visible.length} matched fingerprint pairs shown ·{" "}
+        <span style={{ color: "#2563eb", fontWeight: 500 }}>blue dots</span> = query anchors ·{" "}
+        <span style={{ color: "#d97706", fontWeight: 500 }}>gold dots</span> = song anchors ·
+        lines show alignment
       </p>
-      {visibleMatches.length > 0 ? (
-        <ul className="chart-fallback">
-          {visibleMatches.slice(0, 5).map((match, index) => (
-            <li key={`${match.queryAnchorSeconds}-${match.sourceAnchorSeconds}-fallback-${index}`}>
-              Query {formatSeconds(match.queryAnchorSeconds)} → source{" "}
-              {formatSeconds(match.sourceAnchorSeconds)}; {Math.round(match.anchorFrequencyHz)} Hz
+
+      {visible.length > 0 && (
+        <ol className="chart-fallback">
+          {visible.slice(0, 5).map((m, i) => (
+            <li key={`fa-${i}`}>
+              Query {fmt(m.queryAnchorSeconds)} @ {Math.round(m.anchorFrequencyHz)} Hz →
+              Song {fmt(m.sourceAnchorSeconds)}
             </li>
           ))}
-        </ul>
-      ) : null}
+        </ol>
+      )}
     </div>
   );
 }
