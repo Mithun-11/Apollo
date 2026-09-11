@@ -25,21 +25,28 @@ audio → mono/resample → STFT/spectrogram → peak detection
       → hash lookup → time-offset voting → match
 ```
 
-Correct, visible signal processing matters more than production infrastructure or UI polish. Build in the staged order in `PROJECT_PLAN.md`; do not jump to later stages because they look easier.
+Correct, visible signal processing matters more than production infrastructure or UI polish. Use
+`PROJECT_PLAN.md` as a roadmap and keep its current-state notes accurate; the implemented baseline
+is already beyond the original teacher-demo stages.
 
 ## Current state
 
-- **Current implementation boundary:** Stages 0 and 1 are complete; Stage 2 is next and has
-  not started.
+- **Current implementation boundary:** The signal core, FastAPI routes, Supabase adapter/schema,
+  catalog fingerprinting CLI, and microphone frontend are implemented.
 - The repository has pinned Python and npm environments, CI, dependency smoke coverage,
   and synthetic signal/demo tests.
 - The reusable signal service loads and normalizes audio, extracts spectral peaks, creates
   deterministic fingerprints, and matches songs by time-offset voting.
 - The local demo fingerprints ignored catalog audio, reads a user-supplied clip from
   `demo-clip/`, and saves the waveform, spectrogram, peak, constellation, and vote visualizations.
-- The Next.js frontend is only the generated empty page.
-- No FastAPI routes, Supabase project, database schema, migration, storage bucket, or
-  frontend API client exists yet.
+- `POST /songs` fingerprints a local audio file and stores only its name, Spotify URL, and
+  fingerprints; `POST /recognize` matches a microphone clip and returns the song plus source
+  timestamp.
+- Catalog source files may live in a sibling `Songs/` folder next to the `Apollo/` checkout; the
+  CLI resolves relative paths and never stores the source audio.
+- The Next.js frontend records ten seconds from the microphone and calls `/backend/recognize`.
+- Supabase credentials stay in `backend/.env`; audio files are processed temporarily and are not
+  stored.
 
 Update this section in the same change that completes a stage or materially changes which
 subsystems exist. Do not infer project progress from the roadmap alone.
@@ -50,7 +57,7 @@ Never describe a planned file, endpoint, table, or feature as already implemente
 
 - Python 3.13.11
 - NumPy, SciPy, librosa, soundfile, and Matplotlib for signal work
-- FastAPI, Uvicorn, and supabase-py for later backend integration
+- FastAPI, Uvicorn, and supabase-py for the backend API and Supabase adapter
 - Next.js 16.3.4, React 19.2.4, TypeScript 5.9.3, and Tailwind CSS 4.1.18
 - Node.js 22.19.0 and npm 11.8.0
 - pytest, Ruff, and mypy for backend checks; ESLint and TypeScript for frontend checks
@@ -95,12 +102,12 @@ UI → frontend/lib/api.ts → Next.js /backend/* proxy
 - Plotting/demo code calls signal services; signal services do not call plotting/demo code.
 - Matching consumes fingerprint records as data and must not care whether they came from an in-memory collection or Supabase.
 - FastAPI routes validate/translate HTTP input and call services. Never place FFT, peak detection, hashing, or matching logic in a route.
-- React components never access Supabase or hard-code FastAPI URLs. All backend requests and response types belong in `frontend/lib/api.ts` once it exists.
+- React components never access Supabase or hard-code FastAPI URLs. All backend requests and response types belong in `frontend/lib/api.ts`.
 - Keep Supabase service-role credentials backend-only. No secret may use a `NEXT_PUBLIC_` variable.
 
 ## Signal-processing rules
 
-- Centralize sample rate, FFT/window size, hop length, peak neighborhood, anchor fan-out, time-delta limits, and match threshold in one configuration object/module when Stage 1 introduces them.
+- Centralize sample rate, FFT/window size, hop length, peak neighborhood, anchor fan-out, time-delta limits, and match threshold in one configuration object/module.
 - Give every fingerprint configuration an explicit version. Persisted/query fingerprints with different versions must never be compared.
 - Fingerprints must be deterministic across processes and machines. Never use Python's randomized built-in `hash()` for stored hashes.
 - Keep time units explicit in names and types: frames, samples, seconds, and hertz are not interchangeable.

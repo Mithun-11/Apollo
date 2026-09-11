@@ -1,6 +1,8 @@
 # Apollo
 
-Apollo is a university signal-processing project for recognizing songs from short audio clips. The first milestone proves the fingerprinting algorithm in Python; FastAPI, Supabase, and the Next.js interface wrap that reusable signal core afterward.
+Apollo is a university signal-processing project for recognizing songs from short audio clips. The
+reusable Python fingerprinting core is wrapped by FastAPI, Supabase persistence, and a Next.js
+microphone interface.
 
 See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the staged roadmap,
 [SIGNAL_PROCESSING_GUIDE.md](SIGNAL_PROCESSING_GUIDE.md) for the Stage 1 theory and implementation,
@@ -8,9 +10,8 @@ and [CONSTRAINTS.md](CONSTRAINTS.md) for the project-wide quality rules.
 
 ## Project status
 
-Stages 0 and 1 are complete. Stage 2, the reliable signal core, is next and has not started.
-The `Current state` section in [AGENTS.md](AGENTS.md) is the authoritative progress marker and
-must be updated whenever a stage or major subsystem is completed.
+The signal core, FastAPI/Supabase integration, catalog CLI, and microphone frontend are wired
+together. The `Current state` section in [AGENTS.md](AGENTS.md) is the authoritative progress marker.
 
 ## Required versions
 
@@ -50,6 +51,24 @@ python -m pip_audit --local
 ```
 
 The virtual environment is local and must never be committed.
+
+Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in `backend/.env`, then start the API from `backend/`:
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+Fingerprint a downloaded song without storing its audio:
+
+```powershell
+python -m app.catalog "..\..\Songs\song.wav" --name "Song title" --spotify-url "https://open.spotify.com/track/..."
+```
+
+The example assumes a sibling layout: `Apollo/` and `Songs/` are next to each other. You can also
+pass a filename from that sibling folder; the catalog command resolves it without storing an
+absolute machine-specific path.
+
+The frontend proxies `/backend/*` to `BACKEND_URL` (default `http://127.0.0.1:8000`).
 
 ## Stage 1 signal demo
 
@@ -93,7 +112,8 @@ npm audit --audit-level=high
 ## Local data and secrets
 
 - Copy environment examples to their untracked local equivalents when those integrations are implemented.
-- The Supabase project and database schema do not exist yet; they are created in Stage 3.
+- The schema is applied from `supabase/migrations/20260911000000_initial_schema.sql` and stores
+  song name, Spotify URL, and acoustic fingerprints only.
 - Put demonstration songs and excerpts under `demo-data/`. Audio there is ignored so copyrighted music cannot be committed accidentally.
 
 ## Git workflow

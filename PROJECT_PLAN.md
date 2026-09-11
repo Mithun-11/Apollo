@@ -16,7 +16,9 @@ audio
 → song and timestamp result
 ```
 
-The first progress demonstration is due in 1–2 days. It will prove the signal-processing idea using Python only. FastAPI, Supabase, and the web interface will be added around the same reusable functions afterward.
+The original progress demonstration proved the signal-processing idea using Python only. The
+current implementation now wraps the same reusable functions with Supabase, FastAPI, and a small
+Next.js microphone interface.
 
 Core recognition is required. Advanced interactive plots and hum search are stretch goals.
 
@@ -72,7 +74,10 @@ New package releases cannot change the project by themselves: npm installs the c
 
 ## 5. Staged implementation
 
-### Stage 0 — Repository setup (first half-day)
+The first four stages below are now implemented at their current minimum scope. Stage 5 is the
+remaining evaluation and presentation work; the original day ranges are retained only as history.
+
+### Stage 0 — Repository setup (complete)
 
 - Initialize Git/GitHub, ignore rules, runtime pins, Python virtual environment, dependency locks, README, and minimal CI.
 - Define central signal parameters: sample rate, FFT/window size, hop length, peak neighborhood, anchor fan-out, time-delta limits, match threshold, and `fingerprintVersion`.
@@ -80,7 +85,7 @@ New package releases cannot change the project by themselves: npm installs the c
 
 Acceptance: a fresh clone installs from the committed versions on Windows and macOS and can run the initial test command.
 
-### Stage 1 — Python teacher demo (days 1–2)
+### Stage 1 — Python teacher demo (complete)
 
 Implement reusable signal functions first:
 
@@ -102,7 +107,7 @@ The demo will:
 
 Acceptance: the excerpt matches its source song and the estimated timestamp is within approximately one second. Tag the working commit as `v0.1.0`.
 
-### Stage 2 — Reliable signal core (days 3–7)
+### Stage 2 — Reliable signal core (baseline complete; evaluation pending)
 
 - Turn the prototype into deterministic, independently testable Python services without changing the core function boundaries.
 - Support WAV, MP3, FLAC, and OGG through the pinned `soundfile`/librosa stack and verify each format on Windows and macOS.
@@ -113,16 +118,18 @@ Acceptance: the excerpt matches its source song and the estimated timestamp is w
 
 Acceptance: every clean evaluation excerpt matches correctly, unrelated audio produces no match, and repeated runs generate identical hashes and results.
 
-### Stage 3 — Create Supabase and FastAPI (days 8–12)
+### Stage 3 — Supabase and FastAPI (implemented minimum)
 
-No Supabase project, tables, bucket, or schema currently exists. This stage creates them from scratch; none are required for the teacher demo.
+The development Supabase project and schema are implemented in
+`supabase/migrations/20260911000000_initial_schema.sql`. Audio is processed temporarily and is
+never stored in Supabase.
 
 Database work:
 
-- Create one shared non-production Supabase project and a private audio bucket.
-- Commit the first numbered SQL migration before applying it.
-- Create `songs` with ID, title, artist, storage path, duration, fingerprint version, and timestamps.
-- Create `fingerprints` with fingerprint version, hash, song ID, and frame offset.
+- Create one shared non-production Supabase project.
+- Commit and apply the first numbered SQL migration.
+- Create `songs` with an ID, song name, and Spotify URL.
+- Create `acoustic_fingerprints` with fingerprint version, hash, song ID, and anchor frame.
 - Add cascade deletion, duplicate protection, and an index on `(fingerprint_version, hash)`.
 - Insert and query fingerprints in configurable batches rather than one row/request per fingerprint.
 - Keep query clips temporary; do not save them to Storage.
@@ -137,26 +144,27 @@ FastAPI work:
 Stable API contract:
 
 - `GET /health` → `{ "status": "ok" }`
-- `POST /songs` with audio, title, and artist → song metadata and `fingerprintCount`
-- `GET /songs` → catalog items
-- `DELETE /songs/{id}` → `204`
+- `POST /songs` with audio, name, and Spotify URL → song metadata and `fingerprintCount`
 - `POST /recognize` with multipart audio → `matched`, nullable `song`, nullable `timestampSeconds`, `confidence`, and `matchCount`
 - Every error → `{ "error": { "code", "message" } }`
 
-Acceptance: FastAPI tests prove that the HTTP routes return the same recognition result as the Python demo and that song ingestion persists/retrieves fingerprints correctly.
+The catalog can be populated with `python -m app.catalog ...`; the same ingestion logic is
+available through `POST /songs`. The health route and API import are smoke-tested, while broader
+Supabase persistence and recognition evaluation remain follow-up work.
 
-### Stage 4 — Web MVP (days 13–17)
+### Stage 4 — Web MVP (implemented minimum)
 
-- Create a Next.js/TypeScript frontend with one recognition screen and one basic catalog-management screen.
+- Create a Next.js/TypeScript frontend with one recognition screen.
 - Put every backend call and corresponding TypeScript response type in `frontend/lib/api.ts`.
 - Proxy `/backend/*` through Next.js, with the FastAPI destination supplied by a server-side environment variable.
-- Implement file upload first, followed by microphone permission, recording, stopping, preview, and direct WAV submission.
-- Show waveform, processing state, errors, matched song, confidence, and timestamp.
+- Implement microphone permission, ten-second recording, silent output, and direct WAV submission.
+- Show processing state, errors, matched song, Spotify URL, and timestamp.
 - Keep React components free of signal processing, Supabase access, and hard-coded FastAPI URLs.
 
-Acceptance: on Windows and macOS, a user can add a song, upload or record a query, receive a match, and delete a song through the browser.
+The current browser flow recognizes a recording. Catalog ingestion remains a backend CLI/API task;
+there is no browser catalog-management screen yet.
 
-### Stage 5 — Evaluation and presentation (days 18–21)
+### Stage 5 — Evaluation and presentation (next)
 
 - Run the complete evaluation catalog and record recognition success, timestamp error, processing time, and known failure cases.
 - Test noisy and short samples without silently weakening the recorded baseline.
@@ -164,7 +172,8 @@ Acceptance: on Windows and macOS, a user can add a song, upload or record a quer
 - Prepare the final demonstration and a concise explanation of sampling, STFT, peak selection, fingerprint construction, hashing, and offset voting.
 - Use remaining time for advanced spectrogram, constellation, and matching-point views.
 
-Do not start hum search until this stage is complete. Hum search is a separate pitch-sequence/DTW algorithm, not an extension of spectral fingerprint matching.
+Hum search remains out of scope. It is a separate pitch-sequence/DTW algorithm, not an extension
+of spectral fingerprint matching.
 
 ## 6. Why FastAPI and the web frontend will not require a rewrite
 
@@ -172,11 +181,11 @@ The Python-only start is deliberate. FastAPI is an input/output adapter, while t
 
 ```text
 Teacher demo: local file → signal services → result/plots
-FastAPI later: uploaded file → same signal services → JSON
-Web later: browser file → FastAPI → same signal services → JSON → UI
+Catalog CLI/API: local upload → signal services → Supabase fingerprints
+Web runtime: browser microphone → Next.js proxy → FastAPI → signal services → Supabase lookup → UI
 ```
 
-Integration should take a few focused days, not a major redesign, provided Stage 1 obeys these rules:
+The current integration keeps the same boundaries:
 
 - Signal functions accept ordinary Python data/file-like inputs and return typed Python results.
 - No function reads global CLI state, prints instead of returning results, or relies on hard-coded files.
@@ -184,7 +193,7 @@ Integration should take a few focused days, not a major redesign, provided Stage
 - Matching accepts fingerprint rows as data; it does not know whether they came from memory or Supabase.
 - FastAPI and Supabase imports are introduced only in their adapter modules.
 
-If the initial demo mixes all work into one notebook cell or script with global variables, integration will require extraction and cleanup. The plan avoids that by using reusable functions from the first day.
+The local demo and the API therefore share the same signal services instead of duplicating DSP code.
 
 ## 7. Verification and quality gates
 
@@ -201,10 +210,13 @@ If the initial demo mixes all work into one notebook cell or script with global 
 
 ## 8. Assumptions and deferred work
 
-- Stages 0 and 1 are complete. Stage 2 is the next implementation milestone and has not started.
-- The database and schema will be created in Stage 3.
+- Stages 0–4 have an implemented baseline. The next work is evaluation, browser polish, and
+  operational hardening rather than a new persistence layer.
+- The database schema is applied from the numbered migration and stores only song metadata and
+  acoustic fingerprints.
 - The project is a supervised university demonstration, not a public production service.
 - Authentication is intentionally omitted. If management endpoints become publicly reachable, authentication becomes a required new stage.
 - One shared development Supabase project is sufficient for two developers.
-- Do not commit copyrighted catalog audio; keep it in private Supabase Storage or ignored local folders.
+- Do not commit copyrighted catalog audio; keep it in ignored local folders. The current runtime
+  does not upload catalog audio to Supabase Storage.
 - Deferred until a demonstrated need: ORM, Alembic, Docker, Redis, Celery, FFmpeg, direct PostgreSQL drivers, background workers, production deployment, and hum search.

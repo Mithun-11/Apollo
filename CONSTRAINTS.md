@@ -17,4 +17,5 @@
 | Dependencies | `pip-audit --local`, `npm audit --audit-level=high` | No unreviewed high/critical finding |
 | Platforms | GitHub CI on Windows and macOS | Must pass before merge |
 
-Coverage and recognition accuracy will be measured after the first working signal pipeline and then ratcheted so they cannot regress.
+The signal pipeline and integration checks are in place. Recognition accuracy and coverage still
+need a larger recorded evaluation baseline before they can be ratcheted.

@@ -1,8 +1,9 @@
-# Apollo Stage 1: Signal-Processing Theory and Implementation
+# Apollo: Signal-Processing Theory and Implementation
 
-This guide explains the theory behind Apollo's Stage 1 song-recognition demo and maps each
-idea to the code that implements it. It assumes familiarity with ordinary digital audio concepts
-such as samples and amplitude, but no prior knowledge of Fourier transforms.
+This guide explains the theory behind Apollo's song-recognition pipeline and maps each idea to the
+code that implements it. The same signal services power the local teaching demo, the Supabase
+catalog, the FastAPI routes, and the browser microphone flow. It assumes familiarity with ordinary
+digital audio concepts such as samples and amplitude, but no prior knowledge of Fourier transforms.
 
 ## 1. What Apollo does
 
@@ -99,7 +100,7 @@ Apollo can therefore represent frequencies up to:
 22,050 / 2 = 11,025 Hz
 ```
 
-This is sufficient for the Stage 1 demonstration and halves the processing required for 44,100 Hz
+This is sufficient for the current demonstration and halves the processing required for 44,100 Hz
 audio.
 
 ### 3.4 Peak-normalize amplitude
@@ -320,12 +321,11 @@ pattern occurring later in the full song.
 
 The version field prevents fingerprints made with incompatible configurations from being compared.
 There is a theoretical possibility of hash collision with every finite hash, but a 64-bit digest
-is sufficient for this small Stage 1 in-memory demonstration. Larger-scale collision analysis
-belongs to later evaluation.
+is sufficient for this small catalog. Larger-scale collision analysis belongs to later evaluation.
 
 ## 9. Building the in-memory catalog
 
-For each full song in `demo-data/`, the demo runs:
+For the local teacher demo, each full song in `demo-data/` runs through:
 
 ```text
 load_audio
@@ -334,9 +334,10 @@ load_audio
 → store under the filename stem
 ```
 
-For example, `Cold.wav` is stored under the song ID `Cold`. No database is used in Stage 1. The
-catalog is rebuilt in memory every time the command runs, which keeps the teacher demonstration
-simple and makes the signal algorithm visible before Supabase is introduced.
+For example, `Cold.wav` is stored under the song ID `Cold`. This local demo catalog is rebuilt in
+memory every time the command runs, which keeps the teacher demonstration simple. The integrated
+runtime instead uses `backend/app/catalog.py` to persist fingerprints in Supabase; it still never
+stores the source audio.
 
 ## 10. Matching a query clip
 
@@ -377,9 +378,8 @@ At the default settings, frame 2,584 represents:
 2,584 · 512 / 22,050 = 60.00036 seconds
 ```
 
-The current minimum is five aligned votes. That threshold is enough to reject extremely weak demo
-matches, but Stage 2 must calibrate reliable no-match behavior and confidence using a larger
-evaluation catalog.
+The current minimum is five aligned votes. That threshold is enough for the initial demo, but a
+larger evaluation catalog is still needed to calibrate reliable no-match behavior and confidence.
 
 ## 11. Exact implementation map
 
@@ -415,6 +415,23 @@ This is the orchestration and presentation layer. It:
 The CLI accepts a filename rather than an arbitrary path. This keeps the beginning-stage workflow
 simple and prevents `../` path traversal from silently reading a file outside `demo-clip/`.
 
+### `backend/app/catalog.py`
+
+This adapter connects the signal services to Supabase. The `app.catalog` command fingerprints one
+local song (including a relative path in the sibling `Songs/` folder) and inserts its name, Spotify URL, and fingerprint rows in batches. `recognize_file`
+loads matching fingerprint rows, performs the same offset voting, and fetches the matched song
+metadata.
+
+### `backend/app/main.py` and `backend/app/supabase_client.py`
+
+FastAPI accepts temporary audio uploads at `POST /songs` and `POST /recognize`. The Supabase client
+is created only in the backend from `backend/.env`; the frontend never receives the service key.
+
+### `frontend/app/page.tsx` and `frontend/lib/api.ts`
+
+The browser records ten seconds from the microphone, encodes mono WAV, sends it through the
+Next.js `/backend/*` rewrite, and displays the matched song, Spotify URL, and source timestamp.
+
 ### Tests
 
 `backend/tests/test_signal.py` verifies:
@@ -446,9 +463,9 @@ All important values live in one `SignalConfig` object:
 | `match_threshold` | 5 | Minimum winning aligned votes |
 | `fingerprint_version` | `"1"` | Compatibility marker for fingerprints |
 
-These are calibration knobs because real audio is imperfect. Stage 2 should measure recognition
+These are calibration knobs because real audio is imperfect. Evaluation should measure recognition
 behavior before changing them. Once fingerprints are persisted, changing hash-related values also
-requires a new fingerprint version.
+requires a new fingerprint version and regenerated catalog rows.
 
 ## 13. Running the teacher demonstration
 
@@ -594,31 +611,32 @@ a separate pitch-sequence algorithm such as dynamic time warping and is delibera
 
 ### Is it already robust to noise and phone recordings?
 
-Not proven yet. The constellation method is intended to retain useful peaks under some distortion,
-but Apollo Stage 1 has only demonstrated clean independently saved clips. Stage 2 must measure short
-clips, gain changes, noise, unrelated audio, repeatability, and multiple formats before making a
-robustness claim.
+Not proven comprehensively yet. The constellation method is intended to retain useful peaks under
+some distortion, but the current acceptance checks use synthetic signals and clean clips. A larger
+evaluation should measure short clips, gain changes, noise, unrelated audio, repeatability, and
+multiple formats before making a robustness claim.
 
 ### Why is the catalog rebuilt each run?
 
-Stage 1 isolates and demonstrates the signal algorithm. Persistence and indexed database lookup are
-Stage 3 responsibilities, after the matching behavior is reliable.
+The local teacher demo rebuilds a small catalog each run to keep the signal algorithm visible. The
+integrated path now persists fingerprints and performs indexed lookup through Supabase; the two
+paths intentionally share the same signal functions.
 
 ## 17. Current limitations and next work
 
-Stage 1 is intentionally small:
+The current implementation is intentionally small:
 
-- fingerprints live only in memory;
-- the catalog contains only a few local songs;
+- the local teaching demo keeps fingerprints in memory, while the integrated catalog uses Supabase;
+- there is no browser catalog-management screen;
 - the demo expects a clip from the exact recording;
-- confidence is not calibrated;
-- no-match behavior has not been evaluated against unrelated audio;
-- WAV, MP3, FLAC, and OGG have not yet been verified across Windows and macOS;
-- noise, gain changes, and 3/5/10-second clips have not yet been benchmarked; and
+- confidence and no-match behavior are not yet calibrated against a large evaluation catalog;
+- cross-platform format coverage, noise, gain changes, and 3/5/10-second clips still need broader
+  benchmarks; and
 - parameters are initial values rather than measured optimums.
 
-Stage 2 will turn this working teacher demo into a measured, repeatable signal core. FastAPI,
-Supabase, and the browser remain later adapters around the same reusable functions.
+Next work is evaluation and operational hardening. FastAPI, Supabase, and the browser already use
+the same reusable signal functions; advanced plots, authentication, deployment, and hum search are
+still deferred.
 
 ## 18. Glossary
 
