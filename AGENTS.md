@@ -196,6 +196,7 @@ Never:
 - Never force-push shared branches.
 
 ## graphify
+(If graphify not present then skip that)
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
