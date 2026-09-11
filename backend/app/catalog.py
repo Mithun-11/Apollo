@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -9,11 +10,25 @@ from uuid import uuid4
 
 from supabase import Client
 
+from .services.explanation import (
+    build_matched_fingerprint_display,
+    build_offset_vote_display,
+    build_peak_display,
+    build_spectrogram_display,
+    build_waveform_envelope,
+    select_winning_traces,
+)
 from .services.signal import (
     DEFAULT_CONFIG,
     Fingerprint,
+    FingerprintTrace,
+    Float64Array,
+    FloatArray,
+    MatchResult,
+    Peak,
     SignalConfig,
     create_fingerprints,
+    create_fingerprints_with_traces,
     extract_peaks,
     load_audio,
     match_fingerprints,
@@ -23,6 +38,16 @@ FINGERPRINT_BATCH_SIZE = 500
 SUPPORTED_AUDIO_EXTENSIONS = {".flac", ".mp3", ".ogg", ".wav"}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SONGS_DIR = PROJECT_ROOT.parent / "Songs"
+
+
+@dataclass(frozen=True, slots=True)
+class QueryAnalysis:
+    samples: FloatArray
+    sample_rate: int
+    spectrogram_db: Float64Array
+    peaks: tuple[Peak, ...]
+    fingerprints: tuple[Fingerprint, ...]
+    traces: tuple[FingerprintTrace, ...]
 
 
 def resolve_catalog_audio(path: Path) -> Path:
@@ -49,10 +74,54 @@ def validate_spotify_url(value: str) -> str:
 
 
 def fingerprint_file(path: Path, config: SignalConfig = DEFAULT_CONFIG) -> tuple[Fingerprint, ...]:
-    if path.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
-        raise ValueError("audio must be WAV, MP3, FLAC, or OGG")
+    _validate_audio_path(path)
     audio = load_audio(path, config)
     return create_fingerprints(extract_peaks(audio.samples, config).peaks, config)
+
+
+def analyze_query_file(path: Path, config: SignalConfig = DEFAULT_CONFIG) -> QueryAnalysis:
+    """Decode and analyze a query exactly once for recognition explanations."""
+    _validate_audio_path(path)
+    audio = load_audio(path, config)
+    extraction = extract_peaks(audio.samples, config)
+    fingerprints, traces = create_fingerprints_with_traces(extraction.peaks, config)
+    return QueryAnalysis(
+        samples=audio.samples,
+        sample_rate=audio.sample_rate,
+        spectrogram_db=extraction.spectrogram_db,
+        peaks=extraction.peaks,
+        fingerprints=fingerprints,
+        traces=traces,
+    )
+
+
+def fetch_matching_catalog(
+    query: Sequence[Fingerprint], client: Client, config: SignalConfig = DEFAULT_CONFIG
+) -> dict[str, list[Fingerprint]]:
+    """Fetch only catalog fingerprints whose hashes occur in the query."""
+    if not query:
+        return {}
+
+    hashes = sorted({fingerprint.hash_value for fingerprint in query})
+    catalog: dict[str, list[Fingerprint]] = {}
+    for start in range(0, len(hashes), FINGERPRINT_BATCH_SIZE):
+        response = (
+            client.table("acoustic_fingerprints")
+            .select("song_id,fingerprint_version,hash_value,anchor_frame")
+            .eq("fingerprint_version", config.fingerprint_version)
+            .in_("hash_value", hashes[start : start + FINGERPRINT_BATCH_SIZE])
+            .execute()
+        )
+        for row in _rows(response.data):
+            song_id = str(row["song_id"])
+            catalog.setdefault(song_id, []).append(
+                Fingerprint(
+                    str(row["hash_value"]),
+                    int(row["anchor_frame"]),
+                    str(row["fingerprint_version"]),
+                )
+            )
+    return catalog
 
 
 def build_fingerprint_rows(
@@ -115,32 +184,148 @@ def recognize_file(
     query = fingerprint_file(path, config)
     if not query:
         return _no_match()
-    hashes = sorted({fingerprint.hash_value for fingerprint in query})
-    catalog: dict[str, list[Fingerprint]] = {}
-    for start in range(0, len(hashes), FINGERPRINT_BATCH_SIZE):
-        response = (
-            client.table("acoustic_fingerprints")
-            .select("song_id,fingerprint_version,hash_value,anchor_frame")
-            .eq("fingerprint_version", config.fingerprint_version)
-            .in_("hash_value", hashes[start : start + FINGERPRINT_BATCH_SIZE])
-            .execute()
-        )
-        for row in _rows(response.data):
-            song_id = str(row["song_id"])
-            catalog.setdefault(song_id, []).append(
-                Fingerprint(
-                    str(row["hash_value"]),
-                    int(row["anchor_frame"]),
-                    str(row["fingerprint_version"]),
-                )
-            )
+    catalog = fetch_matching_catalog(query, client, config)
     result = match_fingerprints(query, catalog, config)
     if result is None:
         return _no_match()
+    return _recognition_response(result, len(query), _fetch_song(result.song_id, client))
+
+
+def recognize_file_with_explanation(
+    path: Path, client: Client, config: SignalConfig = DEFAULT_CONFIG
+) -> dict[str, object]:
+    """Recognize a query and return bounded signal and matching evidence."""
+    analysis = analyze_query_file(path, config)
+    catalog = fetch_matching_catalog(analysis.fingerprints, client, config)
+    result = match_fingerprints(analysis.fingerprints, catalog, config)
+
+    catalog_hashes = {
+        fingerprint.hash_value
+        for fingerprints in catalog.values()
+        for fingerprint in fingerprints
+    }
+    matching_hashes = len(
+        {fingerprint.hash_value for fingerprint in analysis.fingerprints} & catalog_hashes
+    )
+
+    if result is None:
+        recognition = _no_match()
+        matched_fingerprints: list[dict[str, float]] = []
+        offset_votes: list[dict[str, object]] = []
+        source_interval: dict[str, float] | None = None
+        winning_traces: tuple[FingerprintTrace, ...] = ()
+    else:
+        song = _fetch_song(result.song_id, client)
+        recognition = _recognition_response(result, len(analysis.fingerprints), song)
+        winning_traces = tuple(
+            select_winning_traces(
+                analysis.traces,
+                catalog.get(result.song_id, []),
+                result.offset_frame,
+                config,
+            )
+        )
+        matched_fingerprints = [
+            {
+                "queryAnchorSeconds": match.query_anchor_seconds,
+                "queryTargetSeconds": match.query_target_seconds,
+                "sourceAnchorSeconds": match.source_anchor_seconds,
+                "sourceTargetSeconds": match.source_target_seconds,
+                "anchorFrequencyHz": match.anchor_frequency_hz,
+                "targetFrequencyHz": match.target_frequency_hz,
+            }
+            for match in build_matched_fingerprint_display(
+                analysis.traces,
+                catalog.get(result.song_id, []),
+                result.offset_frame,
+                config,
+            )
+        ]
+        offset_votes = [
+            {
+                "offsetSeconds": vote.offset_seconds,
+                "count": vote.count,
+                "winning": vote.winning,
+            }
+            for vote in build_offset_vote_display(
+                result.offset_votes,
+                result.offset_frame,
+                config,
+            )
+        ]
+        query_duration_seconds = len(analysis.samples) / analysis.sample_rate
+        source_interval = {
+            "startSeconds": result.timestamp_seconds,
+            "endSeconds": result.timestamp_seconds + query_duration_seconds,
+        }
+
+    query_duration_seconds = len(analysis.samples) / analysis.sample_rate
+    waveform = build_waveform_envelope(analysis.samples, analysis.sample_rate)
+    spectrogram = build_spectrogram_display(
+        analysis.spectrogram_db,
+        query_duration_seconds,
+        config,
+    )
+    peaks = build_peak_display(
+        analysis.peaks,
+        config,
+        matched_traces=winning_traces,
+    )
+    return {
+        "recognition": recognition,
+        "explanation": {
+            "queryDurationSeconds": query_duration_seconds,
+            "sampleRate": analysis.sample_rate,
+            "waveformEnvelope": [
+                {
+                    "timeSeconds": point.time_seconds,
+                    "minimum": point.minimum,
+                    "maximum": point.maximum,
+                }
+                for point in waveform
+            ],
+            "spectrogram": {
+                "valuesDb": spectrogram.values_db,
+                "minimumDb": spectrogram.minimum_db,
+                "maximumDb": spectrogram.maximum_db,
+                "maximumFrequencyHz": spectrogram.maximum_frequency_hz,
+                "durationSeconds": spectrogram.duration_seconds,
+            },
+            "peaks": [
+                {
+                    "timeSeconds": peak.time_seconds,
+                    "frequencyHz": peak.frequency_hz,
+                    "amplitudeDb": peak.amplitude_db,
+                    "matched": peak.matched,
+                }
+                for peak in peaks
+            ],
+            "matchedFingerprints": matched_fingerprints,
+            "offsetVotes": offset_votes,
+            "sourceInterval": source_interval,
+            "counts": {
+                "peaks": len(analysis.peaks),
+                "fingerprints": len(analysis.fingerprints),
+                "matchingHashes": matching_hashes,
+                "winningVotes": result.match_count if result is not None else 0,
+            },
+            "matchThreshold": config.match_threshold,
+            "candidateVotes": [],
+            "processingTimesMs": None,
+        },
+    }
+
+
+def _validate_audio_path(path: Path) -> None:
+    if path.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+        raise ValueError("audio must be WAV, MP3, FLAC, or OGG")
+
+
+def _fetch_song(song_id: str, client: Client) -> dict[str, str]:
     song_rows = _rows(
         client.table("songs")
         .select("id,name,spotify_url")
-        .eq("id", result.song_id)
+        .eq("id", song_id)
         .limit(1)
         .execute()
         .data
@@ -149,14 +334,22 @@ def recognize_file(
         raise RuntimeError("Matched song metadata is missing")
     song = song_rows[0]
     return {
+        "id": str(song["id"]),
+        "name": str(song["name"]),
+        "spotifyUrl": str(song["spotify_url"]),
+    }
+
+
+def _recognition_response(
+    result: MatchResult,
+    query_fingerprint_count: int,
+    song: dict[str, str],
+) -> dict[str, object]:
+    return {
         "matched": True,
-        "song": {
-            "id": str(song["id"]),
-            "name": str(song["name"]),
-            "spotifyUrl": str(song["spotify_url"]),
-        },
+        "song": song,
         "timestampSeconds": result.timestamp_seconds,
-        "confidence": min(1.0, result.match_count / len(query)),
+        "confidence": min(1.0, result.match_count / query_fingerprint_count),
         "matchCount": result.match_count,
     }
 

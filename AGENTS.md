@@ -31,20 +31,24 @@ is already beyond the original teacher-demo stages.
 
 ## Current state
 
-- **Current implementation boundary:** The signal core, FastAPI routes, Supabase adapter/schema,
-  catalog fingerprinting CLI, and microphone frontend are implemented.
+- **Current implementation boundary:** The signal core, explainable FastAPI routes, Supabase
+  adapter/schema, catalog fingerprinting CLI, and explainable microphone frontend are implemented.
 - The repository has pinned Python and npm environments, CI, dependency smoke coverage,
   and synthetic signal/demo tests.
 - The reusable signal service loads and normalizes audio, extracts spectral peaks, creates
-  deterministic fingerprints, and matches songs by time-offset voting.
+  deterministic fingerprints with transient traces, and matches songs by time-offset voting.
+- The explanation service creates bounded waveform, spectrogram, peak, alignment, and vote data
+  without changing recognition or persisted fingerprints.
 - The local demo fingerprints ignored catalog audio, reads a user-supplied clip from
   `demo-clip/`, and saves the waveform, spectrogram, peak, constellation, and vote visualizations.
 - `POST /songs` fingerprints a local audio file and stores only its name, Spotify URL, and
   fingerprints; `POST /recognize` matches a microphone clip and returns the song plus source
-  timestamp.
+  timestamp; `POST /recognize/explain` returns the same recognition object plus bounded query and
+  winning-evidence diagnostics.
 - Catalog source files may live in a sibling `Songs/` folder next to the `Apollo/` checkout; the
   CLI resolves relative paths and never stores the source audio.
-- The Next.js frontend records ten seconds from the microphone and calls `/backend/recognize`.
+- The Next.js frontend records up to ten seconds from the microphone, shows live waveform/level
+  feedback and local playback, and calls `/backend/recognize/explain` for the dashboard.
 - Supabase credentials stay in `backend/.env`; audio files are processed temporarily and are not
   stored.
 

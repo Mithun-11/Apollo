@@ -27,7 +27,7 @@ body {
   background: #151515;
   border: 1px solid #2a2a2a;
   border-radius: 24px;
-  max-width: 460px;
+  max-width: 1120px;
   padding: 48px 40px;
   text-align: center;
   width: 100%;
@@ -75,6 +75,15 @@ button:disabled {
   opacity: 0.55;
 }
 
+.secondary-button {
+  background: transparent;
+  border: 1px solid #525252;
+  color: #d4d4d4;
+  font-size: 0.85rem;
+  margin-left: 8px;
+  padding: 13px 18px;
+}
+
 .status {
   color: #a3a3a3;
   min-height: 24px;
@@ -93,4 +102,173 @@ button:disabled {
 
 .result a {
   color: #86efac;
+}
+
+.live-input,
+.playback {
+  margin-top: 20px;
+  text-align: left;
+}
+
+.live-waveform {
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  display: block;
+  max-width: 100%;
+  width: 100%;
+}
+
+.volume-label {
+  color: #a3a3a3;
+  font-size: 0.8rem;
+  margin: 8px 0 0;
+}
+
+.playback audio {
+  display: block;
+  max-width: 100%;
+  width: 100%;
+}
+
+.explanation-summary {
+  border-top: 1px solid #2a2a2a;
+  margin-top: 28px;
+  padding-top: 24px;
+  text-align: left;
+}
+
+.explanation-summary h2 {
+  font-size: 1.25rem;
+  margin-bottom: 12px;
+}
+
+.explanation-summary p {
+  color: #d4d4d4;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+
+.explanation-dashboard {
+  margin-top: 28px;
+  text-align: left;
+}
+
+.metric-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 24px 0;
+}
+
+.metric-grid div,
+.explanation-panel {
+  background: #101010;
+  border: 1px solid #2a2a2a;
+  border-radius: 16px;
+  padding: 18px;
+}
+
+.metric-grid dt {
+  color: #a3a3a3;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.metric-grid dd {
+  color: #facc15;
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 6px 0 0;
+}
+
+.visual-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.visual-grid .explanation-panel:last-child {
+  grid-column: 1 / -1;
+}
+
+.explanation-panel {
+  margin-top: 16px;
+}
+
+.visual-grid .explanation-panel {
+  margin-top: 0;
+}
+
+.explanation-panel h3 {
+  font-size: 1rem;
+  margin: 0 0 14px;
+}
+
+.chart-figure {
+  margin: 0;
+}
+
+.chart-figure figcaption,
+.chart-caption {
+  color: #a3a3a3;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+
+.spectrogram-canvas,
+.constellation-plot,
+.waveform-plot,
+.alignment-plot,
+.vote-plot {
+  display: block;
+  height: auto;
+  max-width: 100%;
+  width: 100%;
+}
+
+.spectrogram-canvas {
+  border-radius: 8px;
+}
+
+.empty-chart {
+  background: #0b1020;
+  border-radius: 8px;
+  color: #a3a3a3;
+  margin: 0;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.chart-fallback {
+  color: #d4d4d4;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+
+@media (max-width: 760px) {
+  .page-shell {
+    padding: 12px;
+  }
+
+  .card {
+    padding: 32px 18px;
+  }
+
+  .secondary-button {
+    display: block;
+    margin: 10px auto 0;
+  }
+
+  .metric-grid,
+  .visual-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .visual-grid .explanation-panel:last-child {
+    grid-column: auto;
+  }
 }

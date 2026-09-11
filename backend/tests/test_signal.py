@@ -6,9 +6,11 @@ import soundfile as sf
 
 from app.services.signal import (
     DEFAULT_CONFIG,
+    FingerprintTrace,
     Peak,
     SignalConfig,
     create_fingerprints,
+    create_fingerprints_with_traces,
     extract_peaks,
     load_audio,
     match_fingerprints,
@@ -67,6 +69,40 @@ def test_create_fingerprints_is_deterministic() -> None:
     assert first
     assert all(len(fingerprint.hash_value) == 16 for fingerprint in first)
     assert all(fingerprint.version == config.fingerprint_version for fingerprint in first)
+    assert tuple(fingerprint.hash_value for fingerprint in first) == (
+        "3279a0446350426c",
+        "68873a849acee4da",
+        "089f025cd3e72db0",
+        "0ebfc1589132716c",
+        "00f68b9a6ab64c22",
+        "a65ca34f49edd8e5",
+    )
+
+
+def test_fingerprint_traces_match_fingerprints_in_deterministic_order() -> None:
+    config = SignalConfig(fan_out=2, min_time_delta_frames=1, max_time_delta_frames=8)
+    peaks = (
+        Peak(frequency_bin=10, time_frame=0, amplitude_db=-1.0),
+        Peak(frequency_bin=25, time_frame=2, amplitude_db=-2.0),
+        Peak(frequency_bin=40, time_frame=5, amplitude_db=-3.0),
+        Peak(frequency_bin=15, time_frame=8, amplitude_db=-4.0),
+    )
+
+    fingerprints, traces = create_fingerprints_with_traces(peaks, config)
+
+    assert create_fingerprints(peaks, config) == fingerprints
+    assert tuple(trace.fingerprint for trace in traces) == fingerprints
+    assert all(isinstance(trace, FingerprintTrace) for trace in traces)
+    assert tuple(
+        (trace.anchor_frequency_bin, trace.target_frequency_bin, trace.target_frame)
+        for trace in traces
+    ) == (
+        (10, 25, 2),
+        (10, 40, 5),
+        (25, 40, 5),
+        (25, 15, 8),
+        (40, 15, 8),
+    )
 
 
 def test_match_fingerprints_returns_song_and_source_timestamp() -> None:

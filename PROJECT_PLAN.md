@@ -164,13 +164,29 @@ Supabase persistence and recognition evaluation remain follow-up work.
 The current browser flow recognizes a recording. Catalog ingestion remains a backend CLI/API task;
 there is no browser catalog-management screen yet.
 
+### Approved explainability contract (implemented baseline)
+
+The explainability dashboard is approved as an additive feature. `POST /recognize` and its response
+remain unchanged. The new `POST /recognize/explain` accepts the same multipart `audio` field and
+returns:
+
+- `recognition`: the existing `matched`, `song`, `timestampSeconds`, `confidence`, and `matchCount` fields;
+- `explanation`: bounded query waveform, spectrogram, peaks, matched fingerprint alignments, offset votes, source interval, pipeline counts, and `matchThreshold`;
+- `candidateVotes` and `processingTimesMs` reserved as empty/null optional fields in the first implementation.
+
+Explanation data is transient, contains no raw audio or fingerprint hashes, and requires no
+database migration or new persisted fields.
+
 ### Stage 5 — Evaluation and presentation (next)
 
+- The explainability baseline is implemented: bounded query signal views, matched fingerprint
+  alignment, offset votes, live recording feedback, local playback, and truthful no-match states.
 - Run the complete evaluation catalog and record recognition success, timestamp error, processing time, and known failure cases.
 - Test noisy and short samples without silently weakening the recorded baseline.
 - Verify setup from a fresh clone on Windows and macOS.
 - Prepare the final demonstration and a concise explanation of sampling, STFT, peak selection, fingerprint construction, hashing, and offset voting.
-- Use remaining time for advanced spectrogram, constellation, and matching-point views.
+- Optional top-candidate comparison and per-stage processing-time diagnostics remain deferred until
+  the required static flow has been evaluated.
 
 Hum search remains out of scope. It is a separate pitch-sequence/DTW algorithm, not an extension
 of spectral fingerprint matching.

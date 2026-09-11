@@ -60,6 +60,14 @@ class Fingerprint:
 
 
 @dataclass(frozen=True, slots=True)
+class FingerprintTrace:
+    fingerprint: Fingerprint
+    anchor_frequency_bin: int
+    target_frequency_bin: int
+    target_frame: int
+
+
+@dataclass(frozen=True, slots=True)
 class MatchResult:
     song_id: str
     timestamp_seconds: float
@@ -129,8 +137,17 @@ def create_fingerprints(
     peaks: Sequence[Peak], config: SignalConfig = DEFAULT_CONFIG
 ) -> tuple[Fingerprint, ...]:
     """Create deterministic anchor-target hashes from a constellation of peaks."""
+    fingerprints, _ = create_fingerprints_with_traces(peaks, config)
+    return fingerprints
+
+
+def create_fingerprints_with_traces(
+    peaks: Sequence[Peak], config: SignalConfig = DEFAULT_CONFIG
+) -> tuple[tuple[Fingerprint, ...], tuple[FingerprintTrace, ...]]:
+    """Create deterministic fingerprints and the peak pairs that produced them."""
     ordered = sorted(peaks, key=lambda peak: (peak.time_frame, peak.frequency_bin))
     fingerprints: list[Fingerprint] = []
+    traces: list[FingerprintTrace] = []
 
     for anchor_index, anchor in enumerate(ordered):
         targets = 0
@@ -145,18 +162,25 @@ def create_fingerprints(
                 f"{config.fingerprint_version}|{anchor.frequency_bin}|"
                 f"{target.frequency_bin}|{delta}"
             )
-            fingerprints.append(
-                Fingerprint(
-                    hash_value=blake2b(payload.encode(), digest_size=8).hexdigest(),
-                    anchor_frame=anchor.time_frame,
-                    version=config.fingerprint_version,
+            fingerprint = Fingerprint(
+                hash_value=blake2b(payload.encode(), digest_size=8).hexdigest(),
+                anchor_frame=anchor.time_frame,
+                version=config.fingerprint_version,
+            )
+            fingerprints.append(fingerprint)
+            traces.append(
+                FingerprintTrace(
+                    fingerprint=fingerprint,
+                    anchor_frequency_bin=anchor.frequency_bin,
+                    target_frequency_bin=target.frequency_bin,
+                    target_frame=target.time_frame,
                 )
             )
             targets += 1
             if targets == config.fan_out:
                 break
 
-    return tuple(fingerprints)
+    return tuple(fingerprints), tuple(traces)
 
 
 def match_fingerprints(
