@@ -126,7 +126,7 @@ export default function RecognitionExplanation({
           </h2>
           <p className="lbx-sub">
             {song && recognition.timestampSeconds !== null
-              ? `Matched at ${fmt(recognition.timestampSeconds)} · confidence ${Math.round(recognition.confidence * 100)}%`
+              ? `Matched at ${fmt(recognition.timestampSeconds)}`
               : explanation.counts.fingerprints === 0
                 ? "Recording had insufficient spectral structure."
                 : explanation.counts.matchingHashes === 0
