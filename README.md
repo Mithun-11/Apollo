@@ -83,28 +83,6 @@ count data. Explanation data is temporary; no audio or raw fingerprint hashes ar
 returned. The browser also provides a live waveform, coarse input level, stoppable countdown, and
 local playback of the captured WAV.
 
-## Stage 1 signal demo
-
-Place at least two full songs in `demo-data/` and your short query clips in `demo-clip/`.
-To create a clip from a full song, run this from `backend/`:
-
-```bash
-python -m app.create_clip "Cold.wav" 60 8
-```
-
-This extracts 8 seconds starting at 60 seconds and writes `clip_1.wav` to `demo-clip/`.
-Later clips become `clip_2.wav`, `clip_3.wav`, and so on.
-
-Then run the demo from `backend/`, passing only the clip filename:
-
-```bash
-python -m app.demo "your-clip.wav"
-```
-
-The command fingerprints the catalog in memory, identifies which full song contains the clip,
-prints its source timestamp, and saves the signal-pipeline and time-offset-vote plots under
-`artifacts/stage1/`. Local audio and generated output are ignored by Git.
-
 ## Frontend setup
 
 ```bash
@@ -127,7 +105,8 @@ npm audit --audit-level=high
 - Copy environment examples to their untracked local equivalents when those integrations are implemented.
 - The schema is applied from `supabase/migrations/20260911000000_initial_schema.sql` and stores
   song name, Spotify URL, and acoustic fingerprints only.
-- Put demonstration songs and excerpts under `demo-data/`. Audio there is ignored so copyrighted music cannot be committed accidentally.
+- Keep catalog source audio outside Git (for example, in a sibling `Songs/` folder). The backend
+  stores only song metadata and fingerprints; source audio is processed temporarily.
 
 ## Git workflow
 

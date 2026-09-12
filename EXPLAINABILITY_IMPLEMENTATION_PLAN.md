@@ -94,8 +94,7 @@ Read these files before editing:
   fingerprint creation, and offset voting;
 - `backend/app/catalog.py`: Supabase ingestion and recognition orchestration;
 - `backend/app/main.py`: upload validation, temporary files, and API routes;
-- `backend/app/demo.py`: existing waveform, spectrogram, constellation, and vote plots;
-- `backend/tests/test_signal.py` and `backend/tests/test_demo.py`: comparable signal tests;
+- `backend/tests/test_signal.py`: comparable signal tests;
 - `frontend/app/page.tsx`: current microphone capture and page state;
 - `frontend/lib/api.ts`: the only allowed frontend backend-call adapter;
 - `frontend/app/globals.css`: current visual system;

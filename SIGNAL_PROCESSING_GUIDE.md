@@ -325,23 +325,12 @@ is sufficient for this small catalog. Larger-scale collision analysis belongs to
 
 ## 9. Building the in-memory catalog
 
-For the local teacher demo, each full song in `demo-data/` runs through:
-
-```text
-load_audio
-→ extract_peaks
-→ create_fingerprints
-→ store under the filename stem
-```
-
-For example, `Cold.wav` is stored under the song ID `Cold`. This local demo catalog is rebuilt in
-memory every time the command runs, which keeps the teacher demonstration simple. The integrated
-runtime instead uses `backend/app/catalog.py` to persist fingerprints in Supabase; it still never
-stores the source audio.
+The integrated runtime uses `backend/app/catalog.py` to persist fingerprints in Supabase and load
+them into the startup cache; it never stores source audio.
 
 ## 10. Matching a query clip
 
-The file in `demo-clip/` goes through exactly the same loading, normalization, STFT, peak, and
+A captured microphone clip goes through exactly the same loading, normalization, STFT, peak, and
 fingerprint functions as the catalog songs.
 
 Apollo builds a lookup from each catalog fingerprint hash to the song and anchor frames where that
@@ -404,20 +393,6 @@ or hard-coded local paths.
 | `create_fingerprints` | Pairs peaks and generates deterministic BLAKE2b hashes |
 | `match_fingerprints` | Looks up equal hashes and performs per-song time-offset voting |
 
-### `backend/app/demo.py`
-
-This is the orchestration and presentation layer. It:
-
-1. reads the clip filename from the command line;
-2. safely resolves it inside `demo-clip/`;
-3. finds catalog audio in `demo-data/`;
-4. calls the reusable signal functions;
-5. prints the match result; and
-6. saves the explanatory plots.
-
-The CLI accepts a filename rather than an arbitrary path. This keeps the beginning-stage workflow
-simple and prevents `../` path traversal from silently reading a file outside `demo-clip/`.
-
 ### `backend/app/catalog.py`
 
 This adapter connects the signal services to Supabase. The `app.catalog` command fingerprints one
@@ -444,10 +419,6 @@ Next.js `/backend/*` rewrite, and displays the matched song, Spotify URL, and so
 - deterministic fingerprints; and
 - correct song/timestamp recovery from aligned hashes.
 
-`backend/tests/test_demo.py` creates synthetic songs and an independently saved clip whose starting
-sample is intentionally not aligned to an STFT hop. It verifies the correct source, timestamp, and
-plot files. The tests use generated signals so no copyrighted audio enters Git.
-
 ## 12. Central configuration values
 
 All important values live in one `SignalConfig` object:
@@ -473,53 +444,11 @@ behavior before changing them. The three match-decision thresholds affect only w
 accepted and do not require regenerated catalog rows. Once fingerprints are persisted, changing
 hash-related values still requires a new fingerprint version and regenerated catalog rows.
 
-## 13. Running the teacher demonstration
+## 13. Running recognition
 
-### Prepare the inputs
-
-1. Keep at least two full songs in `demo-data/`.
-2. Export a clean 5–10 second excerpt from one of those exact recordings.
-3. Put that short file in `demo-clip/`, for example `cold-sample.wav`.
-4. Keep both directories local. Their audio is ignored by Git.
-
-Standard PCM WAV is the safest demonstration format. The clip may be mono or stereo and may use a
-different sample rate because `load_audio` normalizes the representation.
-
-At this stage, use an excerpt from the exact catalog recording. A cover, live version, humming,
-speaker recording, or independently performed version is not expected to match.
-
-### Run it
-
-From the `backend/` directory with `.venv` activated:
-
-```bash
-python -m app.demo "cold-sample.wav"
-```
-
-The output has this form:
-
-```text
-Query clip: cold-sample.wav
-Predicted song: Cold
-Estimated timestamp: 1 min 0 sec
-Aligned fingerprint votes: 10525
-Plots saved to: .../Apollo/artifacts/stage1
-```
-
-The recorded Stage 1 acceptance run used an eight-second clip from `Cold.wav` near 60 seconds. It
-returned `Cold`, estimated `60.00` seconds, and produced 10,525 aligned votes.
-
-### Generated figures
-
-`artifacts/stage1/signal_pipeline.png` contains:
-
-1. **Normalized waveform** — amplitude changing over time.
-2. **STFT spectrogram** — frequency magnitude changing over time.
-3. **Spectral peak detection** — retained peaks over the spectrogram.
-4. **Constellation map** — only the sparse time-frequency landmarks.
-
-`artifacts/stage1/offset_votes.png` shows candidate timestamps. The tall peak marks the offset where
-many query fingerprints align with the catalog song.
+Start the backend and frontend as described in the project README. The backend loads the catalog
+cache at startup; the browser records a temporary microphone clip and sends it to the recognition
+endpoint.
 
 ## 14. What to explain while showing the figures
 

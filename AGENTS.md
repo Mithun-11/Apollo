@@ -40,8 +40,6 @@ is already beyond the original teacher-demo stages.
   rejects weak or ambiguous winners using absolute, normalized-support, and runner-up gates.
 - The explanation service creates bounded waveform, spectrogram, peak, alignment, and vote data
   without changing recognition or persisted fingerprints.
-- The local demo fingerprints ignored catalog audio, reads a user-supplied clip from
-  `demo-clip/`, and saves the waveform, spectrogram, peak, constellation, and vote visualizations.
 - `POST /songs` fingerprints a local audio file and stores only its name, Spotify URL, and
   fingerprints; `POST /recognize` matches a microphone clip and returns the song plus source
   timestamp; `POST /recognize/explain` returns the same recognition object plus bounded query and

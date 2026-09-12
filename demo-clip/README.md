@@ -1,13 +1,4 @@
-# Local query clips
+# Legacy demo clips
 
-Put short audio clips here for the local teaching/demo recognizer. These files are local inputs and
-are ignored by Git; do not commit copyrighted audio.
-
-From `backend/`, recognize a clip by filename:
-
-```bash
-python -m app.demo "your-clip.wav"
-```
-
-The browser recognizer uses the same signal services through `POST /recognize` and does not require
-placing its temporary microphone recording in this directory.
+The Stage 1 command-line demo has been retired. The browser recognizer sends its temporary
+microphone recording directly to `POST /recognize` and does not use this directory.
