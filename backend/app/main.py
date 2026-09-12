@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import Annotated
 
@@ -14,11 +16,19 @@ from .catalog import (
     recognize_file,
     recognize_file_with_explanation,
 )
-from .supabase_client import get_supabase_client
+from .database import connect_database
 
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
-app = FastAPI(title="Apollo API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+    with closing(connect_database()):
+        pass
+    yield
+
+
+app = FastAPI(title="Apollo API", version="0.1.0", lifespan=lifespan)
 
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -65,7 +75,8 @@ async def create_song(
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        return ingest_song(path, name, spotify_url, get_supabase_client())
+        with closing(connect_database()) as connection:
+            return ingest_song(path, name, spotify_url, connection)
     except ValueError as exc:
         return _error(422, "INVALID_SONG", str(exc))
     except Exception:
@@ -80,7 +91,8 @@ async def recognize(audio: Annotated[UploadFile, File()]) -> JSONResponse | dict
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        return recognize_file(path, get_supabase_client())
+        with closing(connect_database()) as connection:
+            return recognize_file(path, connection)
     except ValueError as exc:
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:
@@ -97,7 +109,8 @@ async def recognize_with_explanation(
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        return recognize_file_with_explanation(path, get_supabase_client())
+        with closing(connect_database()) as connection:
+            return recognize_file_with_explanation(path, connection)
     except ValueError as exc:
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:
