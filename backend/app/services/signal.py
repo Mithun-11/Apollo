@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import os
-import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import blake2b
 from pathlib import Path
-
-# Keep librosa/Numba's writable cache out of read-only site-packages installs.
-os.environ.setdefault("NUMBA_CACHE_DIR", str(Path(tempfile.gettempdir()) / "apollo-numba-cache"))
 
 import librosa
 import numpy as np
