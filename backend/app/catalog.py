@@ -8,6 +8,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from rich.progress import Progress
 from supabase import Client
 
 from .services.explanation import (
@@ -47,6 +48,16 @@ class QueryAnalysis:
     peaks: tuple[Peak, ...]
     fingerprints: tuple[Fingerprint, ...]
     traces: tuple[FingerprintTrace, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogCache:
+    songs: dict[str, dict[str, str]]
+    fingerprints: dict[str, list[Fingerprint]]
+
+    @property
+    def fingerprint_count(self) -> int:
+        return sum(len(fingerprints) for fingerprints in self.fingerprints.values())
 
 
 def resolve_catalog_audio(path: Path) -> Path:
@@ -94,33 +105,96 @@ def analyze_query_file(path: Path, config: SignalConfig = DEFAULT_CONFIG) -> Que
     )
 
 
-def fetch_matching_catalog(
-    query: Sequence[Fingerprint], client: Client, config: SignalConfig = DEFAULT_CONFIG
+def load_catalog_cache(
+    client: Client,
+    config: SignalConfig = DEFAULT_CONFIG,
+    *,
+    page_size: int = FINGERPRINT_BATCH_SIZE,
+) -> CatalogCache:
+    """Load song metadata and current-version fingerprints into process memory."""
+    if page_size < 1:
+        raise ValueError("page_size must be positive")
+
+    song_rows: list[dict[str, Any]] = []
+    for start in range(0, 10**9, page_size):
+        rows = _rows(
+            client.table("songs")
+            .select("id,name,spotify_url")
+            .order("id")
+            .range(start, start + page_size - 1)
+            .execute()
+            .data
+        )
+        if not rows:
+            break
+        song_rows.extend(rows)
+        if len(rows) < page_size:
+            break
+
+    songs = {
+        str(row["id"]): {
+            "id": str(row["id"]),
+            "name": str(row["name"]),
+            "spotifyUrl": str(row["spotify_url"]),
+        }
+        for row in song_rows
+    }
+    fingerprints_by_song: dict[str, list[Fingerprint]] = {}
+
+    with Progress() as progress:
+        task = progress.add_task("Caching fingerprints", total=None)
+        first_page = True
+        for start in range(0, 10**9, page_size):
+            select_kwargs = {"count": "exact"} if first_page else {}
+            response = (
+                client.table("acoustic_fingerprints")
+                .select(
+                    "song_id,fingerprint_version,hash_value,anchor_frame",
+                    **select_kwargs,
+                )
+                .eq("fingerprint_version", config.fingerprint_version)
+                .order("song_id")
+                .order("hash_value")
+                .order("anchor_frame")
+                .range(start, start + page_size - 1)
+                .execute()
+            )
+            if first_page:
+                progress.update(task, total=response.count)
+                first_page = False
+            rows = _rows(response.data)
+            for row in rows:
+                fingerprints_by_song.setdefault(str(row["song_id"]), []).append(
+                    Fingerprint(
+                        str(row["hash_value"]),
+                        int(row["anchor_frame"]),
+                        str(row["fingerprint_version"]),
+                    )
+                )
+            progress.update(task, advance=len(rows))
+            if len(rows) < page_size:
+                break
+
+    cache = CatalogCache(songs=songs, fingerprints=fingerprints_by_song)
+    print(f"Cached {len(cache.songs)} songs / {cache.fingerprint_count} fingerprints")
+    return cache
+
+
+def _matching_cached_catalog(
+    query: Sequence[Fingerprint], cache: CatalogCache
 ) -> dict[str, list[Fingerprint]]:
-    """Fetch only catalog fingerprints whose hashes occur in the query."""
+    """Keep only cached rows whose hashes occur in the query."""
     if not query:
         return {}
 
     hashes = sorted({fingerprint.hash_value for fingerprint in query})
-    catalog: dict[str, list[Fingerprint]] = {}
-    for start in range(0, len(hashes), FINGERPRINT_BATCH_SIZE):
-        response = (
-            client.table("acoustic_fingerprints")
-            .select("song_id,fingerprint_version,hash_value,anchor_frame")
-            .eq("fingerprint_version", config.fingerprint_version)
-            .in_("hash_value", hashes[start : start + FINGERPRINT_BATCH_SIZE])
-            .execute()
-        )
-        for row in _rows(response.data):
-            song_id = str(row["song_id"])
-            catalog.setdefault(song_id, []).append(
-                Fingerprint(
-                    str(row["hash_value"]),
-                    int(row["anchor_frame"]),
-                    str(row["fingerprint_version"]),
-                )
-            )
-    return catalog
+    query_hashes = set(hashes)
+    return {
+        song_id: [
+            fingerprint for fingerprint in fingerprints if fingerprint.hash_value in query_hashes
+        ]
+        for song_id, fingerprints in cache.fingerprints.items()
+    }
 
 
 def build_fingerprint_rows(
@@ -178,24 +252,24 @@ def ingest_song(
 
 
 def recognize_file(
-    path: Path, client: Client, config: SignalConfig = DEFAULT_CONFIG
+    path: Path, cache: CatalogCache, config: SignalConfig = DEFAULT_CONFIG
 ) -> dict[str, object]:
     query = fingerprint_file(path, config)
     if not query:
         return _no_match()
-    catalog = fetch_matching_catalog(query, client, config)
+    catalog = _matching_cached_catalog(query, cache)
     result = match_fingerprints(query, catalog, config)
     if result is None:
         return _no_match()
-    return _recognition_response(result, len(query), _fetch_song(result.song_id, client))
+    return _recognition_response(result, len(query), _fetch_song(result.song_id, cache))
 
 
 def recognize_file_with_explanation(
-    path: Path, client: Client, config: SignalConfig = DEFAULT_CONFIG
+    path: Path, cache: CatalogCache, config: SignalConfig = DEFAULT_CONFIG
 ) -> dict[str, object]:
     """Recognize a query and return bounded signal and matching evidence."""
     analysis = analyze_query_file(path, config)
-    catalog = fetch_matching_catalog(analysis.fingerprints, client, config)
+    catalog = _matching_cached_catalog(analysis.fingerprints, cache)
     result = match_fingerprints(analysis.fingerprints, catalog, config)
 
     catalog_hashes = {
@@ -214,7 +288,7 @@ def recognize_file_with_explanation(
         source_interval: dict[str, float] | None = None
         winning_traces: tuple[FingerprintTrace, ...] = ()
     else:
-        song = _fetch_song(result.song_id, client)
+        song = _fetch_song(result.song_id, cache)
         recognition = _recognition_response(result, len(analysis.fingerprints), song)
         winning_evidence = build_winning_fingerprint_evidence(
             analysis.traces,
@@ -314,23 +388,11 @@ def _validate_audio_path(path: Path) -> None:
         raise ValueError("audio must be WAV, MP3, FLAC, or OGG")
 
 
-def _fetch_song(song_id: str, client: Client) -> dict[str, str]:
-    song_rows = _rows(
-        client.table("songs")
-        .select("id,name,spotify_url")
-        .eq("id", song_id)
-        .limit(1)
-        .execute()
-        .data
-    )
-    if not song_rows:
+def _fetch_song(song_id: str, cache: CatalogCache) -> dict[str, str]:
+    song = cache.songs.get(song_id)
+    if song is None:
         raise RuntimeError("Matched song metadata is missing")
-    song = song_rows[0]
-    return {
-        "id": str(song["id"]),
-        "name": str(song["name"]),
-        "spotifyUrl": str(song["spotify_url"]),
-    }
+    return song
 
 
 def _recognition_response(
