@@ -1,19 +1,14 @@
 # Apollo frontend
 
-This Next.js app is the browser recognition screen. It records ten seconds from the microphone,
-encodes a mono WAV clip, and sends it to the FastAPI `/recognize` route through the `/backend/*`
-rewrite.
+This Next.js application records up to ten seconds from the microphone, encodes the captured mono
+PCM samples as WAV, and sends them to `POST /backend/recognize/explain`.
+
+The page shows recording state, live level/waveform feedback, local playback, the recognition
+result, and bounded signal/matching evidence returned by FastAPI. It does not connect to Supabase.
 
 ## Run locally
 
-Start the backend first from `backend/`:
-
-```powershell
-cd ..\backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
-
-Then run the frontend:
+Start FastAPI on port 8000, then run from `frontend/`:
 
 ```powershell
 npm ci
@@ -21,8 +16,8 @@ Copy-Item .env.local.example .env.local
 npm run dev
 ```
 
-Open <http://localhost:3000>, click **Listen**, and allow microphone access. `BACKEND_URL` in
-`.env.local` defaults to `http://localhost:8000`.
+Open <http://localhost:3000> and allow microphone access. `BACKEND_URL` controls the server used by
+the Next.js `/backend/*` rewrite and defaults to `http://127.0.0.1:8000`.
 
 ## Checks
 
@@ -30,6 +25,8 @@ Open <http://localhost:3000>, click **Listen**, and allow microphone access. `BA
 npm run lint
 npm run typecheck
 npm run build
+npm audit --audit-level=high
 ```
 
-The frontend does not access Supabase directly and must never contain the backend service key.
+Keep request functions and response types in `frontend/lib/api.ts`. Never add Supabase credentials
+or direct database calls to browser code.

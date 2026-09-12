@@ -28,11 +28,7 @@ frontend/coverage/
 frontend/.npm-cache/
 frontend/.env.local
 
-# Local audio and generated demo output
-demo-data/*
-!demo-data/README.md
-demo-clip/*
-!demo-clip/README.md
+# Local audio and generated output
 artifacts/
 *.wav
 *.mp3
