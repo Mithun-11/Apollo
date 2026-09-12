@@ -4,10 +4,16 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .catalog import SUPPORTED_AUDIO_EXTENSIONS, ingest_song, recognize_file
+from .catalog import (
+    SUPPORTED_AUDIO_EXTENSIONS,
+    ingest_song,
+    recognize_file,
+    recognize_file_with_explanation,
+)
 from .supabase_client import get_supabase_client
 
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
@@ -30,14 +36,18 @@ async def _save_upload(upload: UploadFile) -> Path:
     path = Path(temporary.name)
     size = 0
     try:
-        while chunk := await upload.read(CHUNK_SIZE):
-            size += len(chunk)
-            if size > MAX_AUDIO_BYTES:
-                raise ValueError("audio file is too large (maximum 50 MB)")
-            temporary.write(chunk)
-    finally:
-        temporary.close()
-        await upload.close()
+        try:
+            while chunk := await upload.read(CHUNK_SIZE):
+                size += len(chunk)
+                if size > MAX_AUDIO_BYTES:
+                    raise ValueError("audio file is too large (maximum 50 MB)")
+                temporary.write(chunk)
+        finally:
+            temporary.close()
+            await upload.close()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -78,3 +88,28 @@ async def recognize(audio: Annotated[UploadFile, File()]) -> JSONResponse | dict
     finally:
         if path is not None:
             path.unlink(missing_ok=True)
+
+
+@app.post("/recognize/explain", response_model=None)
+async def recognize_with_explanation(
+    audio: Annotated[UploadFile, File()],
+) -> JSONResponse | dict[str, object]:
+    path: Path | None = None
+    try:
+        path = await _save_upload(audio)
+        return recognize_file_with_explanation(path, get_supabase_client())
+    except ValueError as exc:
+        return _error(422, "INVALID_AUDIO", str(exc))
+    except Exception:
+        return _error(500, "RECOGNITION_ERROR", "Unable to recognize this audio")
+    finally:
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(
+    request: Request, _exc: RequestValidationError
+) -> JSONResponse:
+    code = "INVALID_SONG" if request.url.path == "/songs" else "INVALID_AUDIO"
+    return _error(422, code, "audio file is required")

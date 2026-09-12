@@ -10,8 +10,9 @@ and [CONSTRAINTS.md](CONSTRAINTS.md) for the project-wide quality rules.
 
 ## Project status
 
-The signal core, FastAPI/Supabase integration, catalog CLI, and microphone frontend are wired
-together. The `Current state` section in [AGENTS.md](AGENTS.md) is the authoritative progress marker.
+The signal core, FastAPI/Supabase integration, catalog CLI, and explainable microphone frontend
+are wired together. The `Current state` section in [AGENTS.md](AGENTS.md) is the authoritative
+progress marker.
 
 ## Required versions
 
@@ -69,6 +70,13 @@ pass a filename from that sibling folder; the catalog command resolves it withou
 absolute machine-specific path.
 
 The frontend proxies `/backend/*` to `BACKEND_URL` (default `http://127.0.0.1:8000`).
+
+The API keeps `POST /recognize` as the compact recognition contract and adds
+`POST /recognize/explain` for the dashboard. The explain endpoint returns the same recognition
+fields plus bounded waveform, spectrogram, peak, fingerprint-alignment, offset-vote, and pipeline
+count data. Explanation data is temporary; no audio or raw fingerprint hashes are persisted or
+returned. The browser also provides a live waveform, coarse input level, stoppable countdown, and
+local playback of the captured WAV.
 
 ## Stage 1 signal demo
 

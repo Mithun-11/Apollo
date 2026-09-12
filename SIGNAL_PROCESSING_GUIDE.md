@@ -378,8 +378,11 @@ At the default settings, frame 2,584 represents:
 2,584 · 512 / 22,050 = 60.00036 seconds
 ```
 
-The current minimum is five aligned votes. That threshold is enough for the initial demo, but a
-larger evaluation catalog is still needed to calibrate reliable no-match behavior and confidence.
+Apollo does not accept the largest vote total automatically. The current decision gate requires at
+least ten aligned votes, at least one percent of the query fingerprints to support the winning
+alignment, and a winning vote count at least 1.5 times the strongest competing song. This rejects
+small accidental alignments and ambiguous results. A larger evaluation catalog is still needed to
+calibrate these initial conservative values and record their false-accept/false-reject trade-off.
 
 ## 11. Exact implementation map
 
@@ -460,12 +463,15 @@ All important values live in one `SignalConfig` object:
 | `fan_out` | 10 | Maximum targets paired with each anchor |
 | `min_time_delta_frames` | 1 | Nearest allowed target |
 | `max_time_delta_frames` | 200 | Farthest allowed target |
-| `match_threshold` | 5 | Minimum winning aligned votes |
+| `match_threshold` | 10 | Minimum winning aligned votes |
+| `min_match_ratio` | 0.01 | Minimum winning votes divided by query fingerprints |
+| `min_winner_ratio` | 1.5 | Required separation from the strongest competing song |
 | `fingerprint_version` | `"1"` | Compatibility marker for fingerprints |
 
 These are calibration knobs because real audio is imperfect. Evaluation should measure recognition
-behavior before changing them. Once fingerprints are persisted, changing hash-related values also
-requires a new fingerprint version and regenerated catalog rows.
+behavior before changing them. The three match-decision thresholds affect only whether a result is
+accepted and do not require regenerated catalog rows. Once fingerprints are persisted, changing
+hash-related values still requires a new fingerprint version and regenerated catalog rows.
 
 ## 13. Running the teacher demonstration
 

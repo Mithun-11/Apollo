@@ -1,0 +1,6 @@
+cd d:\term-project\2_2\Apollo\backend
+.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+
+cd d:\term-project\2_2\Apollo\frontend
+npm run dev
