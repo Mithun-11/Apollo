@@ -191,8 +191,7 @@ def _matching_cached_catalog(
     if not query:
         return {}
 
-    hashes = sorted({fingerprint.hash_value for fingerprint in query})
-    query_hashes = set(hashes)
+    query_hashes = {fingerprint.hash_value for fingerprint in query}
     return {
         song_id: [
             fingerprint for fingerprint in fingerprints if fingerprint.hash_value in query_hashes
