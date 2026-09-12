@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, cast
@@ -25,7 +25,7 @@ CHUNK_SIZE = 1024 * 1024
 
 
 @asynccontextmanager
-async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+async def lifespan(application: FastAPI) -> AsyncGenerator[None]:
     application.state.catalog_cache = load_catalog_cache(get_supabase_client())
     yield
     application.state.catalog_cache = None
