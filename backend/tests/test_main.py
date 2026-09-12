@@ -60,11 +60,25 @@ def _explanation_response(matched: bool) -> dict[str, object]:
     }
 
 
+@pytest.fixture(autouse=True)
+def catalog_cache_state(monkeypatch: Any) -> None:
+    monkeypatch.setattr(main.app.state, "catalog_cache", object(), raising=False)
+
+
 def test_health_route_returns_status() -> None:
     response = TestClient(main.app).get("/health")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_lifespan_loads_catalog_cache_before_requests(monkeypatch: Any) -> None:
+    expected_cache = object()
+    monkeypatch.setattr(main, "load_catalog_cache", lambda _client: expected_cache)
+    monkeypatch.setattr(main, "get_supabase_client", lambda: object())
+
+    with TestClient(main.app):
+        assert main.app.state.catalog_cache is expected_cache
 
 
 def test_explain_route_returns_successful_response_and_cleans_temp_file(
@@ -130,6 +144,49 @@ def test_existing_recognize_contract_is_unchanged(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json() == expected
+
+
+def test_recognize_route_passes_startup_cache_to_service(monkeypatch: Any) -> None:
+    expected_cache = object()
+    main.app.state.catalog_cache = expected_cache
+    received: list[object] = []
+
+    def recognize(_path: Path, cache: object) -> dict[str, object]:
+        received.append(cache)
+        return {
+            "matched": False,
+            "song": None,
+            "timestampSeconds": None,
+            "confidence": 0.0,
+            "matchCount": 0,
+        }
+
+    monkeypatch.setattr(main, "recognize_file", recognize)
+
+    response = TestClient(main.app).post(
+        "/recognize",
+        files={"audio": ("microphone.wav", b"audio", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert received == [expected_cache]
+
+
+def test_recognize_route_rejects_request_when_cache_is_missing() -> None:
+    main.app.state.catalog_cache = None
+
+    response = TestClient(main.app).post(
+        "/recognize",
+        files={"audio": ("microphone.wav", b"audio", "audio/wav")},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "RECOGNITION_ERROR",
+            "message": "Unable to recognize this audio",
+        }
+    }
 
 
 def test_unsupported_extension_uses_error_envelope() -> None:

@@ -8,6 +8,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from postgrest.types import CountMethod
 from rich.progress import Progress
 from supabase import Client
 
@@ -116,7 +117,8 @@ def load_catalog_cache(
         raise ValueError("page_size must be positive")
 
     song_rows: list[dict[str, Any]] = []
-    for start in range(0, 10**9, page_size):
+    start = 0
+    while True:
         rows = _rows(
             client.table("songs")
             .select("id,name,spotify_url")
@@ -130,6 +132,7 @@ def load_catalog_cache(
         song_rows.extend(rows)
         if len(rows) < page_size:
             break
+        start += page_size
 
     songs = {
         str(row["id"]): {
@@ -144,13 +147,13 @@ def load_catalog_cache(
     with Progress() as progress:
         task = progress.add_task("Caching fingerprints", total=None)
         first_page = True
-        for start in range(0, 10**9, page_size):
-            select_kwargs = {"count": "exact"} if first_page else {}
+        start = 0
+        while True:
             response = (
                 client.table("acoustic_fingerprints")
                 .select(
                     "song_id,fingerprint_version,hash_value,anchor_frame",
-                    **select_kwargs,
+                    count=CountMethod.exact if first_page else None,
                 )
                 .eq("fingerprint_version", config.fingerprint_version)
                 .order("song_id")
@@ -174,6 +177,7 @@ def load_catalog_cache(
             progress.update(task, advance=len(rows))
             if len(rows) < page_size:
                 break
+            start += page_size
 
     cache = CatalogCache(songs=songs, fingerprints=fingerprints_by_song)
     print(f"Cached {len(cache.songs)} songs / {cache.fingerprint_count} fingerprints")

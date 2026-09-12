@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from app import catalog
+from app.catalog import CatalogCache
 from app.services.signal import (
     Fingerprint,
     Peak,
@@ -15,56 +16,33 @@ from app.services.signal import (
 )
 
 
-class FakeResponse:
-    def __init__(self, data: list[dict[str, Any]]) -> None:
-        self.data = data
-
-
-class FakeQuery:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self.rows = rows
-
-    def select(self, _fields: str) -> FakeQuery:
-        return self
-
-    def eq(self, field: str, value: object) -> FakeQuery:
-        self.rows = [row for row in self.rows if row.get(field) == value]
-        return self
-
-    def in_(self, field: str, values: list[str]) -> FakeQuery:
-        self.rows = [row for row in self.rows if row.get(field) in values]
-        return self
-
-    def limit(self, count: int) -> FakeQuery:
-        self.rows = self.rows[:count]
-        return self
-
-    def execute(self) -> FakeResponse:
-        return FakeResponse(self.rows)
-
-
-class FakeClient:
-    def __init__(self, fingerprint_rows: list[dict[str, Any]]) -> None:
-        self.tables = {
-            "acoustic_fingerprints": fingerprint_rows,
-            "songs": [
-                {
-                    "id": "source-song",
-                    "name": "Source Song",
-                    "spotify_url": "https://open.spotify.com/track/example",
-                }
-            ],
-        }
-
-    def table(self, name: str) -> FakeQuery:
-        return FakeQuery(list(self.tables[name]))
+def _cache(fingerprint_rows: list[dict[str, Any]]) -> CatalogCache:
+    return CatalogCache(
+        songs={
+            "source-song": {
+                "id": "source-song",
+                "name": "Source Song",
+                "spotifyUrl": "https://open.spotify.com/track/example",
+            }
+        },
+        fingerprints={
+            "source-song": [
+                Fingerprint(
+                    str(row["hash_value"]),
+                    int(row["anchor_frame"]),
+                    str(row["fingerprint_version"]),
+                )
+                for row in fingerprint_rows
+            ]
+        },
+    )
 
 
 def _analysis_and_catalog(
     config: SignalConfig,
     *,
     source_offset: int = 240,
-) -> tuple[catalog.QueryAnalysis, list[dict[str, Any]], tuple[str, ...]]:
+) -> tuple[catalog.QueryAnalysis, CatalogCache, tuple[str, ...]]:
     peaks = (
         Peak(frequency_bin=1, time_frame=0, amplitude_db=-1.0),
         Peak(frequency_bin=2, time_frame=2, amplitude_db=-2.0),
@@ -89,7 +67,7 @@ def _analysis_and_catalog(
         }
         for fingerprint in fingerprints
     ]
-    return analysis, rows, tuple(fingerprint.hash_value for fingerprint in fingerprints)
+    return analysis, _cache(rows), tuple(fingerprint.hash_value for fingerprint in fingerprints)
 
 
 def test_recognize_file_with_explanation_reuses_matching_evidence(
@@ -103,11 +81,11 @@ def test_recognize_file_with_explanation_reuses_matching_evidence(
         max_time_delta_frames=8,
         match_threshold=3,
     )
-    analysis, rows, hashes = _analysis_and_catalog(config)
+    analysis, cache, hashes = _analysis_and_catalog(config)
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
     response = catalog.recognize_file_with_explanation(
-        catalog.Path("query.wav"), FakeClient(rows), config
+        catalog.Path("query.wav"), cache, config
     )
 
     recognition = response["recognition"]
@@ -156,7 +134,7 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
     response = catalog.recognize_file_with_explanation(
-        catalog.Path("query.wav"), FakeClient([]), config
+        catalog.Path("query.wav"), _cache([]), config
     )
 
     assert response["recognition"] == {
@@ -203,7 +181,7 @@ def test_hashes_without_an_accepted_offset_explain_the_no_match(
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
     response = catalog.recognize_file_with_explanation(
-        catalog.Path("query.wav"), FakeClient(rows), config
+        catalog.Path("query.wav"), _cache(rows), config
     )
 
     explanation = response["explanation"]

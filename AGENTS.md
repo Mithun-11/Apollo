@@ -46,6 +46,10 @@ is already beyond the original teacher-demo stages.
   fingerprints; `POST /recognize` matches a microphone clip and returns the song plus source
   timestamp; `POST /recognize/explain` returns the same recognition object plus bounded query and
   winning-evidence diagnostics.
+- The FastAPI lifespan loads song metadata and current-version fingerprints into a per-process
+  in-memory cache at startup, reports cached totals in the backend terminal, and recognition uses
+  that snapshot without per-request Supabase catalog reads. Restart the backend after catalog
+  changes to refresh it.
 - Catalog source files may live in a sibling `Songs/` folder next to the `Apollo/` checkout; the
   CLI resolves relative paths and never stores the source audio.
 - The Next.js frontend records up to ten seconds from the microphone, shows live waveform/level

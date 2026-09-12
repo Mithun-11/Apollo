@@ -91,3 +91,15 @@ def test_load_catalog_cache_groups_versioned_fingerprints_and_reports_progress(
     output = capsys.readouterr().out
     assert "2 songs" in output
     assert "2 fingerprints" in output
+
+
+def test_load_catalog_cache_handles_empty_catalog(capsys: Any) -> None:
+    cache = load_catalog_cache(
+        FakeClient({"songs": [], "acoustic_fingerprints": []}),
+        SignalConfig(fingerprint_version="v-test"),
+    )
+
+    assert cache.songs == {}
+    assert cache.fingerprints == {}
+    assert cache.fingerprint_count == 0
+    assert "Cached 0 songs / 0 fingerprints" in capsys.readouterr().out

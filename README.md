@@ -59,6 +59,11 @@ Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in `backend/.env`, then start the A
 uvicorn app.main:app --reload
 ```
 
+When the backend starts, it loads the song metadata and fingerprint catalog into an in-memory
+cache and prints a progress bar plus the cached fingerprint total. Recognition checks this local
+snapshot instead of querying Supabase for each recording. Restart the backend after adding songs
+through the CLI, API, or Supabase so the cache refreshes.
+
 Fingerprint a downloaded song without storing its audio:
 
 ```powershell

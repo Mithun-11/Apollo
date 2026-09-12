@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -10,7 +11,9 @@ from fastapi.responses import JSONResponse
 
 from .catalog import (
     SUPPORTED_AUDIO_EXTENSIONS,
+    CatalogCache,
     ingest_song,
+    load_catalog_cache,
     recognize_file,
     recognize_file_with_explanation,
 )
@@ -18,7 +21,16 @@ from .supabase_client import get_supabase_client
 
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
-app = FastAPI(title="Apollo API", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    application.state.catalog_cache = load_catalog_cache(get_supabase_client())
+    yield
+    application.state.catalog_cache = None
+
+
+app = FastAPI(title="Apollo API", version="0.1.0", lifespan=lifespan)
 
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -51,6 +63,13 @@ async def _save_upload(upload: UploadFile) -> Path:
     return path
 
 
+def _get_catalog_cache(request: Request) -> CatalogCache:
+    cache = getattr(request.app.state, "catalog_cache", None)
+    if cache is None:
+        raise RuntimeError("Catalog cache is not loaded")
+    return cast(CatalogCache, cache)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -76,11 +95,13 @@ async def create_song(
 
 
 @app.post("/recognize", response_model=None)
-async def recognize(audio: Annotated[UploadFile, File()]) -> JSONResponse | dict[str, object]:
+async def recognize(
+    request: Request, audio: Annotated[UploadFile, File()]
+) -> JSONResponse | dict[str, object]:
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        return recognize_file(path, get_supabase_client())
+        return recognize_file(path, _get_catalog_cache(request))
     except ValueError as exc:
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:
@@ -92,12 +113,13 @@ async def recognize(audio: Annotated[UploadFile, File()]) -> JSONResponse | dict
 
 @app.post("/recognize/explain", response_model=None)
 async def recognize_with_explanation(
+    request: Request,
     audio: Annotated[UploadFile, File()],
 ) -> JSONResponse | dict[str, object]:
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        return recognize_file_with_explanation(path, get_supabase_client())
+        return recognize_file_with_explanation(path, _get_catalog_cache(request))
     except ValueError as exc:
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:
