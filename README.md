@@ -25,6 +25,11 @@ python -m pip install -r requirements.txt
 python -m app.database
 ```
 
+SQLite is included with the supported Python installation, so no separate SQLite server or package
+is needed. Initialization creates an empty local catalog; it cannot recover the former Supabase
+fingerprints. Add locally licensed catalog audio with the command below, or obtain the shared
+`data/apollo.db` snapshot from the team.
+
 The default database is `data/apollo.db`. Set `APOLLO_DB_PATH` to use another snapshot. Normal API
 startup fails clearly when the database is missing; it never creates an empty catalog implicitly.
 Generated database files are ignored by Git and should be distributed separately.
