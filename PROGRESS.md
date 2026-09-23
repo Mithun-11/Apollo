@@ -4,7 +4,7 @@ Read this before changing recognition, matching, or the microphone flow. It reco
 current algorithm does, why, how it was measured, what was tried and rejected, and what is still
 open. Update it when you change any of these.
 
-Last updated: 2026-09-23. Current release is v3, merged into `main` by PR #20.
+Last updated: 2026-09-24. Current release is v3.
 
 ## Current state at a glance
 
@@ -13,8 +13,9 @@ Last updated: 2026-09-23. Current release is v3, merged into `main` by PR #20.
 | Fingerprints | `fingerprint_version = "3"` in `backend/app/services/signal.py` (`SignalConfig`) |
 | Database | `data/apollo-v3.db`, the default path; not in Git; 6 songs |
 | Songs | Cold(feat. Future), Lukiye, Hall of Fame, Sparkle, Bus Sohokari, Ekanto Golaap |
-| Frontend | Warm microphone, streaming checks, early stop (`frontend/app/page.tsx`) |
-| API | Unchanged: `POST /songs`, `POST /recognize`, `POST /recognize/explain` |
+| Frontend | Microphone or browser-tab audio, streaming checks, early stop, and seven-step signal replay (`frontend/app/page.tsx`) |
+| Edits | Speed/pitch search fallback for nightcore, slowed, deep-voice edits (`backend/app/services/speed_search.py`) |
+| API | Same paths: `POST /songs`, `POST /recognize`, `POST /recognize/explain`; responses add `speedFactor` and `pitchFactor` |
 | CI | Windows and macOS verify jobs plus the dependency audit, all passing on `main` |
 
 ## The algorithm (v3)
@@ -52,8 +53,67 @@ floor must be re-measured when:
 - **clips get longer,** because at 15 s a threshold of 15 already produced up to 5 false
   matches in 50.
 
+## Speed and pitch search for edits (`backend/app/services/speed_search.py`)
+
+**The limit it fixes.** A stress test of plain v3 (6 songs, 30 clips of 10 s per condition) showed
+that reverb (even an 8 s tail), EQ, bass boost, clipping and MP3 at 16 kbps cause no misses, and
+tempo-only changes are tolerated up to ±10%. Pitch is the weak point: hashes store exact
+frequency bins, so matching fails beyond about ±1% speed (0.98×: 0/30) or about ±0.25 semitone of
+pitch shift. Every nightcore, slowed, and deep-voice edit therefore failed.
+
+**How it works.** It is a fallback that runs only when the normal match fails on at least 4 s of
+audio, so ordinary recognition keeps its speed (about 0.2 s). The signal core is unchanged.
+
+- **What is searched:** candidate edits of two kinds, each spaced 1.5% apart over 0.75–1.35:
+  - **speed edits,** where time and pitch scale together (nightcore, slowed);
+  - **pitch-only edits,** where only frequency scales (deep voice, pitched up).
+- **How a candidate is tried:** the query's detected peaks are mapped back onto the song's grid
+  (rescaled) instead of re-analysing the audio, and the normal matcher and thresholds run on
+  the result.
+- **Two stages.** A coarse pass runs all 78 candidates with 2 targets per anchor. The full
+  matcher then runs only at the 2 best candidates and their neighbours. Database lookups
+  dominate the cost: a naive search did about 230,000 lookups and took 3.3 s.
+- **Result fields:** `speedFactor` and `pitchFactor` report the detected edit (both 1 for no
+  edit). The explanation maps the evidence back to the recording's own timeline so the graphs
+  line up.
+
+**Measured on the real database** (18 clips of 10 s per edit, 3 per song):
+
+| Edit | Plain v3 | With search | Detected as |
+|---|---|---|---|
+| Original (no edit) | 18/18 | 18/18 (0.2 s) | no edit |
+| Slowed 0.85× + reverb 2 s | 0 | 18/18 | speed 0.849× |
+| Nightcore 1.25× + bass +12 dB | 0 | 18/18 | speed 1.250× |
+| Sped up 1.2× + pink noise 0 dB | 0 | 18/18 | speed 1.196× |
+| Deep voice −1 / −2 / −3 / −4 semitones | partial / 0 | 18/18 each | pitch −1.0 / −2.1 / −3.1 / −3.9 st |
+| Deep voice −2 semitones + reverb 2 s | 0 | 15/18 | pitch −2.1 st |
+| Pitch up +2 semitones | 0 | 18/18 | pitch +2.1 st |
+
+Speed edits alone from 0.80× to 1.30× were found 30/30 at every step tested.
+
+**Cost and false matches.**
+
+- **Cost:** a search takes about 2.4 s, and only on the fallback path.
+- **False matches:** with the true song hidden, the search produced 3 chance matches in 180
+  queries (20–22 votes). The live app's rule that two consecutive checks must agree on song and
+  timestamp rejected all 3.
+- **Why no stricter vote bar:** a higher bar just for search matches was rejected because real
+  deep voice + reverb matches go as low as 21 votes.
+
+**Tried and rejected for the search.**
+
+- **Speed-only candidates:** a pitch-only edit corrected by speed leaves the tempo off by the same
+  factor, so deep voice at −2 semitones dropped to 9/30 and −3 semitones to 0/30.
+- **Coarse pass with 1 target per anchor:** faster (1.55 s), but deep voice + reverb fell from
+  16/18 to 12/18.
+
 ## Frontend behaviour (`frontend/app/page.tsx`)
 
+- **Browser-tab capture:** the source picker can record a tab's shared audio through
+  `getDisplayMedia` in supported browsers. The tab stream is released when recording stops;
+  the captured clip then goes through the same recognition and explanation path as microphone
+  audio. The live signal label follows the selected source, and the optional replay sound uses
+  the locally captured clip for either source.
 - **Microphone capture:** request `{ audio: true }` so the browser uses the selected device's
   defaults. The earlier explicit mono/raw constraints left a built-in Windows microphone array
   silent in Apollo while the same device recorded on `improveDetectionAlgo` with `{ audio: true }`.
@@ -74,7 +134,8 @@ floor must be re-measured when:
   spectrogram, peaks, query fingerprint pairs, indexed lookup summary, alignment, and clustered
   offset votes. The replay is explanatory and runs after capture; it does not change or delay the
   matching algorithm. The explanation response includes bounded pair examples, top candidate
-  vote totals, and the exact acceptance/rejection reason. Reduced-motion users can step through
+  vote totals, the exact acceptance/rejection reason, and the fingerprint count used for lookup
+  after an edit search. Reduced-motion users can step through
   the same evidence without animation. Recognition checks still use `/recognize` as before.
 - **Optional replay audio:** the seven-stage explanation defaults to silent playback. A sound
   toggle uses the local recording blob and synchronizes the recorded audio with the visual
@@ -155,7 +216,12 @@ songs and timestamps. The streaming stop fired at a median of 4 s (max 6 s).
 4. **Re-check the 20-vote floor** whenever songs are added, using the false-match test.
 5. **Soft-song weak spots:** the remaining misses were quiet Lukiye/Sparkle passages under extreme
    chatter.
-6. **`filelock`** is installed through `pip_audit`'s file cache but is not pinned in
+6. **Speed-search cost:** about 2.4 s per search. Options include one deduplicated database
+   lookup across candidates, or threaded lookups.
+7. **Not covered by any search:** re-sung covers, live versions and humming. These are different
+   recordings; candidates are chroma features with DTW alignment (signal-only) or learned
+   embeddings.
+8. **`filelock`** is installed through `pip_audit`'s file cache but is not pinned in
    `requirements.txt`. This predates v3 and is harmless.
 
 ## Environment notes (Windows development machine)

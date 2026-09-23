@@ -36,6 +36,12 @@ from .services.signal import (
     load_audio,
     match_fingerprints,
 )
+from .services.speed_search import (
+    UNCHANGED,
+    PlaybackChange,
+    map_evidence_to_recording,
+    search_playback_speeds,
+)
 
 FINGERPRINT_BATCH_SIZE = 500
 SUPPORTED_AUDIO_EXTENSIONS = {".flac", ".mp3", ".ogg", ".wav"}
@@ -194,9 +200,25 @@ def recognize_file(
         return _no_match()
     catalog = fetch_matching_catalog(query, connection, config)
     result = match_fingerprints(query, catalog, config)
-    if result is None:
+    if result is not None:
+        return _recognition_response(result, len(query), _fetch_song(result.song_id, connection))
+
+    # The query is decoded again only on this fallback path, keeping the common path unchanged.
+    audio = load_audio(path, config)
+    speed_match = search_playback_speeds(
+        extract_peaks(audio.samples, config).peaks,
+        len(audio.samples) / audio.sample_rate,
+        lambda fingerprints: fetch_matching_catalog(fingerprints, connection, config),
+        config,
+    )
+    if speed_match is None:
         return _no_match()
-    return _recognition_response(result, len(query), _fetch_song(result.song_id, connection))
+    return _recognition_response(
+        speed_match.result,
+        len(speed_match.fingerprints),
+        _fetch_song(speed_match.result.song_id, connection),
+        speed_match.change,
+    )
 
 
 def recognize_file_with_explanation(
@@ -204,9 +226,27 @@ def recognize_file_with_explanation(
 ) -> dict[str, object]:
     """Recognize a query and return bounded signal and matching evidence."""
     analysis = analyze_query_file(path, config)
-    catalog = fetch_matching_catalog(analysis.fingerprints, connection, config)
-    diagnostics = analyze_fingerprint_match(analysis.fingerprints, catalog, config)
+    query_duration_seconds = len(analysis.samples) / analysis.sample_rate
+    query_fingerprints = analysis.fingerprints
+    query_traces = analysis.traces
+    change = UNCHANGED
+    catalog = fetch_matching_catalog(query_fingerprints, connection, config)
+    diagnostics = analyze_fingerprint_match(query_fingerprints, catalog, config)
     result = diagnostics.result
+    if result is None:
+        speed_match = search_playback_speeds(
+            analysis.peaks,
+            query_duration_seconds,
+            lambda fingerprints: fetch_matching_catalog(fingerprints, connection, config),
+            config,
+        )
+        if speed_match is not None:
+            result = speed_match.result
+            change = speed_match.change
+            query_fingerprints = speed_match.fingerprints
+            query_traces = speed_match.traces
+            catalog = {song: list(prints) for song, prints in speed_match.catalog.items()}
+            diagnostics = analyze_fingerprint_match(query_fingerprints, catalog, config)
 
     catalog_hashes = {
         fingerprint.hash_value
@@ -214,7 +254,7 @@ def recognize_file_with_explanation(
         for fingerprint in fingerprints
     }
     matching_hashes = len(
-        {fingerprint.hash_value for fingerprint in analysis.fingerprints} & catalog_hashes
+        {fingerprint.hash_value for fingerprint in query_fingerprints} & catalog_hashes
     )
 
     if result is None:
@@ -225,12 +265,17 @@ def recognize_file_with_explanation(
         winning_traces: tuple[FingerprintTrace, ...] = ()
     else:
         song = _fetch_song(result.song_id, connection)
-        recognition = _recognition_response(result, len(analysis.fingerprints), song)
-        winning_evidence = build_winning_fingerprint_evidence(
-            analysis.traces,
-            catalog.get(result.song_id, []),
-            result.offset_frame,
-            config,
+        recognition = _recognition_response(result, len(query_fingerprints), song, change)
+        # Speed-search evidence is on the song's timeline; the display uses the recording's.
+        winning_evidence = map_evidence_to_recording(
+            build_winning_fingerprint_evidence(
+                query_traces,
+                catalog.get(result.song_id, []),
+                result.offset_frame,
+                config,
+            ),
+            analysis.peaks,
+            change,
         )
         winning_traces = winning_evidence.traces
         matched_fingerprints = [
@@ -256,13 +301,11 @@ def recognize_file_with_explanation(
                 config,
             )
         ]
-        query_duration_seconds = len(analysis.samples) / analysis.sample_rate
         source_interval = {
             "startSeconds": result.timestamp_seconds,
-            "endSeconds": result.timestamp_seconds + query_duration_seconds,
+            "endSeconds": result.timestamp_seconds + query_duration_seconds * change.speed_factor,
         }
 
-    query_duration_seconds = len(analysis.samples) / analysis.sample_rate
     waveform = build_waveform_envelope(analysis.samples, analysis.sample_rate)
     spectrogram = build_spectrogram_display(
         analysis.spectrogram_db,
@@ -340,6 +383,7 @@ def recognize_file_with_explanation(
             "counts": {
                 "peaks": len(analysis.peaks),
                 "fingerprints": len(analysis.fingerprints),
+                "lookupFingerprints": len(query_fingerprints),
                 "matchingHashes": matching_hashes,
                 "winningVotes": result.match_count if result is not None else 0,
             },
@@ -403,6 +447,7 @@ def _recognition_response(
     result: MatchResult,
     query_fingerprint_count: int,
     song: dict[str, str],
+    change: PlaybackChange = UNCHANGED,
 ) -> dict[str, object]:
     return {
         "matched": True,
@@ -410,6 +455,8 @@ def _recognition_response(
         "timestampSeconds": result.timestamp_seconds,
         "confidence": min(1.0, result.match_count / query_fingerprint_count),
         "matchCount": result.match_count,
+        "speedFactor": change.speed_factor,
+        "pitchFactor": change.pitch_factor,
     }
 
 
@@ -420,6 +467,8 @@ def _no_match() -> dict[str, object]:
         "timestampSeconds": None,
         "confidence": 0.0,
         "matchCount": 0,
+        "speedFactor": None,
+        "pitchFactor": None,
     }
 
 

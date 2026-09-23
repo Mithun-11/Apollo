@@ -129,6 +129,26 @@ button:disabled { cursor: wait; opacity: 0.4; }
   opacity: 1;
 }
 
+/* Audio source picker (microphone or browser tab) */
+.source-picker {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+}
+.source-option {
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  padding: 8px 16px;
+}
+.source-option-active {
+  background: var(--text-primary);
+  color: #09090b;
+}
+
 /* Recording pulse animation for the button */
 @keyframes pulse-ring {
   0%   { box-shadow: 0 0 0 0 rgba(251,191,36,0.55); }
@@ -601,6 +621,9 @@ body { background: radial-gradient(circle at 50% -18%, #11313b 0, #0a1419 35%, #
 .card h1 { font-size: clamp(2.8rem, 6.8vw, 6rem); line-height: 1.02; letter-spacing: -.065em; background: none; -webkit-text-fill-color: currentColor; }
 .card h1 span { color: #83d5d9; }
 .subtitle { max-width: 590px; margin: 23px auto 31px; font-size: 1.03rem; }
+.source-picker { display: flex; width: max-content; max-width: 100%; margin: 0 auto 20px; background: #10242b; border-color: #34525b; }
+.source-option { color: #b3c9cd; }
+.source-option-active { background: #a5e1df; color: #092027; }
 .card > button:not(.secondary-button) { background: #a5e1df; color: #092027; }
 .card > .btn-recording { background: #efb96a !important; }
 .status { color: #c0d0d2; }

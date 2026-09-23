@@ -117,6 +117,7 @@ def test_recognize_file_with_explanation_reuses_matching_evidence(
     assert explanation["counts"] == {
         "peaks": 4,
         "fingerprints": len(analysis.fingerprints),
+        "lookupFingerprints": len(analysis.fingerprints),
         "matchingHashes": len(hashes),
         "winningVotes": recognition["matchCount"],
     }
@@ -160,6 +161,8 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
         "timestampSeconds": None,
         "confidence": 0.0,
         "matchCount": 0,
+        "speedFactor": None,
+        "pitchFactor": None,
     }
     explanation = response["explanation"]
     assert isinstance(explanation, dict)

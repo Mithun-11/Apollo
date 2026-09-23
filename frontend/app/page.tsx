@@ -23,6 +23,20 @@ const TIMESTAMP_AGREEMENT_SECONDS = 0.25;
 const MICROPHONE_CONSTRAINTS: MediaStreamConstraints = {
   audio: true,
 };
+// Tab audio is the exact digital signal a browser tab plays. Browsers only share it through
+// their screen-share picker, and the API requires video, so the page offers tabs only and
+// disables the video track it cannot avoid receiving. Chrome and Edge share tab audio on
+// Windows and macOS; Safari and Firefox do not.
+const TAB_CAPTURE_OPTIONS = {
+  video: { displaySurface: "browser" },
+  audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  preferCurrentTab: false,
+  selfBrowserSurface: "exclude",
+  surfaceSwitching: "include",
+  systemAudio: "exclude",
+} as DisplayMediaStreamOptions;
+const TAB_AUDIO_UNSUPPORTED =
+  "This browser cannot share tab audio. Use Chrome or Edge (Windows or macOS).";
 const RECORDER_WORKLET = `
 class ApolloRecorderProcessor extends AudioWorkletProcessor {
   process(inputs) {
@@ -34,11 +48,13 @@ class ApolloRecorderProcessor extends AudioWorkletProcessor {
 registerProcessor("apollo-recorder", ApolloRecorderProcessor);
 `;
 
+type AudioSource = "microphone" | "tab";
+
 type RecognitionState =
   | { phase: "ready" }
   | { phase: "starting-microphone" }
   | { phase: "recording"; elapsedSeconds: number }
-  | { phase: "processing" }
+  | { phase: "processing"; recognition: RecognitionResponse | null }
   | { phase: "complete"; response: RecognitionExplanationResponse }
   | { phase: "error"; message: string };
 
@@ -104,8 +120,31 @@ function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function openMicrophone(onSamples: (samples: Float32Array) => void): Promise<Microphone> {
-  const stream = await navigator.mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS);
+function openMicrophoneStream(): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS);
+}
+
+async function openTabStream(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getDisplayMedia) throw new Error(TAB_AUDIO_UNSUPPORTED);
+  const stream = await navigator.mediaDevices.getDisplayMedia(TAB_CAPTURE_OPTIONS);
+  stream.getVideoTracks().forEach((track) => {
+    track.enabled = false;
+  });
+  if (stream.getAudioTracks().length === 0) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw new Error(
+      "No tab audio was shared. Pick a browser tab and turn on “Share tab audio”. " +
+        TAB_AUDIO_UNSUPPORTED.replace("This browser cannot share tab audio. ", ""),
+    );
+  }
+  return stream;
+}
+
+async function openMicrophone(
+  onSamples: (samples: Float32Array) => void,
+  openStream: () => Promise<MediaStream> = openMicrophoneStream,
+): Promise<Microphone> {
+  const stream = await openStream();
   const context = new AudioContext();
   try {
     if (!context.audioWorklet) {
@@ -120,7 +159,11 @@ async function openMicrophone(onSamples: (samples: Float32Array) => void): Promi
       URL.revokeObjectURL(workletUrl);
     }
     const source = context.createMediaStreamSource(stream);
-    const recorder = new AudioWorkletNode(context, "apollo-recorder");
+    // Stereo tab audio is mixed down to mono; the microphone is already mono.
+    const recorder = new AudioWorkletNode(context, "apollo-recorder", {
+      channelCount: 1,
+      channelCountMode: "explicit",
+    });
     const silentOutput = context.createGain();
     silentOutput.gain.value = 0;
     recorder.port.onmessage = (event: MessageEvent<Float32Array>) => {
@@ -165,7 +208,10 @@ class MicrophoneKeeper {
   private opening: Promise<Microphone> | null = null;
   private ready: Microphone | null = null;
 
-  constructor(private readonly onSamples: (samples: Float32Array) => void) {}
+  constructor(
+    private readonly onSamples: (samples: Float32Array) => void,
+    private readonly openStream: () => Promise<MediaStream> = openMicrophoneStream,
+  ) {}
 
   isReady(): boolean {
     return this.ready !== null && isMicrophoneLive(this.ready);
@@ -174,7 +220,7 @@ class MicrophoneKeeper {
   acquire(): Promise<Microphone> {
     if (this.ready && !isMicrophoneLive(this.ready)) this.release();
     if (this.opening) return this.opening;
-    const opening: Promise<Microphone> = openMicrophone(this.onSamples).then(
+    const opening: Promise<Microphone> = openMicrophone(this.onSamples, this.openStream).then(
       (microphone) => {
         if (this.opening !== opening) {
           void closeMicrophone(microphone);
@@ -210,6 +256,8 @@ export default function Home() {
   const liveSamplesRef = useRef<Float32Array>(new Float32Array(0));
   const sessionRef = useRef<RecordingSession | null>(null);
   const microphoneRef = useRef<MicrophoneKeeper | null>(null);
+  const tabAudioRef = useRef<MicrophoneKeeper | null>(null);
+  const [source, setSource] = useState<AudioSource>("microphone");
   const capturing = useRef(false);
   const playbackUrlRef = useRef<string | null>(null);
   const lastVolumeUpdate = useRef(0);
@@ -230,7 +278,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const keeper = new MicrophoneKeeper((chunk) => {
+    const receiveSamples = (chunk: Float32Array) => {
       if (!capturing.current) return;
       chunks.current.push(chunk);
       liveSamplesRef.current = chunk;
@@ -240,8 +288,12 @@ export default function Home() {
         setVolume(chunk.length > 0 ? Math.sqrt(sumSquares / chunk.length) : 0);
         lastVolumeUpdate.current = now;
       }
-    });
+    };
+    const keeper = new MicrophoneKeeper(receiveSamples);
     microphoneRef.current = keeper;
+    // Tab sharing lasts for one Listen: it stops as soon as recording ends (see listen()).
+    const tabAudio = new MicrophoneKeeper(receiveSamples, openTabStream);
+    tabAudioRef.current = tabAudio;
     let active = true;
 
     // Warm up only when permission was already granted, so the page never prompts on load.
@@ -279,7 +331,9 @@ export default function Home() {
       active = false;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       keeper.release();
+      tabAudio.release();
       if (microphoneRef.current === keeper) microphoneRef.current = null;
+      if (tabAudioRef.current === tabAudio) tabAudioRef.current = null;
     };
   }, []);
 
@@ -295,6 +349,7 @@ export default function Home() {
   }
 
   async function listen() {
+    const requestedSource = source;
     if (
       busy.current ||
       sessionRef.current ||
@@ -304,9 +359,13 @@ export default function Home() {
     ) {
       return;
     }
-    const keeper = microphoneRef.current;
+    const keeper = requestedSource === "tab" ? tabAudioRef.current : microphoneRef.current;
     if (!keeper) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
+    if (requestedSource === "tab" && !navigator.mediaDevices?.getDisplayMedia) {
+      setState({ phase: "error", message: TAB_AUDIO_UNSUPPORTED });
+      return;
+    }
+    if (requestedSource === "microphone" && !navigator.mediaDevices?.getUserMedia) {
       setState({ phase: "error", message: "This browser does not support microphone access." });
       return;
     }
@@ -325,6 +384,12 @@ export default function Home() {
         keeper.release();
         microphone = await keeper.acquire();
       }
+      if (requestedSource === "tab") {
+        // "Stop sharing" in the browser ends the recording early and recognizes what was heard.
+        microphone.stream.getAudioTracks().forEach((track) => {
+          track.onended = () => sessionRef.current?.finish();
+        });
+      }
       await microphone.context.resume();
       chunks.current = [];
       liveSamplesRef.current = new Float32Array(0);
@@ -335,6 +400,7 @@ export default function Home() {
       const activeSession = session;
       const sampleRate = microphone.context.sampleRate;
 
+      let confirmedRecognition: RecognitionResponse | null = null;
       const recordedChunks = await new Promise<Float32Array[]>((resolve) => {
         let resolved = false;
         let checkInFlight = false;
@@ -376,7 +442,10 @@ export default function Home() {
               const text = confirmed ? "Stable match confirmed" : response.matched ? "Possible match; checking again" : "No stable match yet";
               setCheckMessage(text);
               setChecks((current) => [...current, { seconds: elapsedSeconds, text }].slice(-4));
-              if (confirmed) activeSession.finish();
+              if (confirmed) {
+                confirmedRecognition = response;
+                activeSession.finish();
+              }
               previousCheck = response.matched ? response : null;
             })
             .catch(() => {
@@ -391,8 +460,13 @@ export default function Home() {
       });
 
       capturing.current = false;
+      // Stop tab sharing as soon as recording ends, before waiting for the explanation.
+      if (requestedSource === "tab") {
+        keeper.release();
+        microphone = null;
+      }
       if (unmounted.current) return;
-      setState({ phase: "processing" });
+      setState({ phase: "processing", recognition: confirmedRecognition });
       const recording = encodeWav(recordedChunks, sampleRate);
       replacePlaybackUrl(recording);
       const response = await recognizeAudioWithExplanation(recording);
@@ -402,11 +476,22 @@ export default function Home() {
       if (!unmounted.current) {
         setState({
           phase: "error",
-          message: error instanceof Error ? error.message : "Unable to use the microphone",
+          message:
+            requestedSource === "tab" &&
+            error instanceof DOMException &&
+            error.name === "NotAllowedError"
+              ? "Tab sharing was cancelled."
+              : error instanceof Error
+                ? error.message
+                : "Unable to use the microphone",
         });
       }
     } finally {
       capturing.current = false;
+      if (requestedSource === "tab") {
+        keeper.release();
+        microphone = null;
+      }
       if (session) {
         if (session.tickTimerId !== null) window.clearInterval(session.tickTimerId);
         if (sessionRef.current === session) sessionRef.current = null;
@@ -418,6 +503,12 @@ export default function Home() {
   }
 
   const result = state.phase === "complete" ? state.response : null;
+  const recognition =
+    state.phase === "complete"
+      ? state.response.recognition
+      : state.phase === "processing"
+        ? state.recognition
+        : null;
   const isBusy =
     state.phase === "starting-microphone" ||
     state.phase === "recording" ||
@@ -426,11 +517,15 @@ export default function Home() {
     state.phase === "ready"
       ? "Ready to listen"
       : state.phase === "starting-microphone"
-        ? "Starting microphone…"
+        ? source === "tab"
+          ? "Choose the tab playing the song and turn on “Share tab audio”…"
+          : "Starting microphone…"
         : state.phase === "recording"
           ? `Listening… ${state.elapsedSeconds}s (stops automatically once the song is recognized)`
           : state.phase === "processing"
-            ? "Recognizing and explaining…"
+            ? state.recognition
+              ? "Match found · loading the explanation…"
+              : "Recognizing and explaining…"
             : state.phase === "complete"
               ? state.response.recognition.matched
                 ? "Match found"
@@ -442,14 +537,33 @@ export default function Home() {
       <section className="card" aria-labelledby="title">
         <p className="eyebrow">APOLLO</p>
         <h1 id="title">Hear the answer.<br /><span>See the signal.</span></h1>
-        <p className="subtitle">Recognize a nearby song, then explore the real waveform, frequencies, fingerprints and votes behind the match.</p>
+        <p className="subtitle">Recognize a song from your microphone or a browser tab, then explore the real waveform, frequencies, fingerprints and votes behind the match.</p>
+        <div className="source-picker" role="radiogroup" aria-label="Audio source">
+          {(["microphone", "tab"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={source === option}
+              className={source === option ? "source-option source-option-active" : "source-option"}
+              disabled={isBusy}
+              onClick={() => setSource(option)}
+            >
+              {option === "microphone" ? "Microphone" : "Browser tab"}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           onClick={listen}
           disabled={isBusy}
           className={state.phase === "recording" ? "btn-recording" : ""}
         >
-          {state.phase === "recording" ? "⏺ Recording…" : "🎙 Listen"}
+          {state.phase === "recording"
+            ? "⏺ Recording…"
+            : source === "tab"
+              ? "🔊 Listen"
+              : "🎙 Listen"}
         </button>
         {state.phase === "recording" ? (
           <button className="secondary-button" type="button" onClick={stopRecording}>
@@ -459,7 +573,7 @@ export default function Home() {
         <p className="status" aria-live="polite">{status}</p>
         {state.phase === "recording" ? (
           <div className="live-input">
-            <div className="live-head"><span>LIVE MICROPHONE SIGNAL</span><strong>{state.elapsedSeconds}s / {MAX_RECORDING_SECONDS}s</strong></div>
+            <div className="live-head"><span>{source === "tab" ? "LIVE BROWSER TAB SIGNAL" : "LIVE MICROPHONE SIGNAL"}</span><strong>{state.elapsedSeconds}s / {MAX_RECORDING_SECONDS}s</strong></div>
             <LiveWaveform samplesRef={liveSamplesRef} />
             <div className="live-progress" role="progressbar" aria-label="Recording duration" aria-valuenow={state.elapsedSeconds} aria-valuemin={0} aria-valuemax={MAX_RECORDING_SECONDS}><span style={{ width: `${Math.min(100, state.elapsedSeconds / MAX_RECORDING_SECONDS * 100)}%` }} /></div>
             <p className="volume-label">Input level: {Math.round(Math.min(1, volume) * 100)}% · {checkMessage}</p>
@@ -473,13 +587,16 @@ export default function Home() {
           </div>
         ) : null}
 
-        {result?.recognition.matched && result.recognition.song ? (
+        {recognition?.matched && recognition.song ? (
           <div className="result" aria-live="polite">
             <p className="result-label">
-              Found at {formatTimestamp(result.recognition.timestampSeconds)}
+              Found at {formatTimestamp(recognition.timestampSeconds)}
             </p>
-            <h2>{result.recognition.song.name}</h2>
-            <a href={result.recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
+            <h2>{recognition.song.name}</h2>
+            {describeEdit(recognition) ? (
+              <p className="result-label">{describeEdit(recognition)}</p>
+            ) : null}
+            <a href={recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
               Open in Spotify
             </a>
           </div>
@@ -489,6 +606,19 @@ export default function Home() {
       </section>
     </main>
   );
+}
+
+function describeEdit({ speedFactor, pitchFactor }: RecognitionResponse): string | null {
+  if (speedFactor && Math.abs(speedFactor - 1) >= 0.02) {
+    const kind = speedFactor > 1 ? "sped up" : "slowed down";
+    return `Detected edit: ${kind} (played at ${speedFactor.toFixed(2)}×)`;
+  }
+  if (pitchFactor && Math.abs(pitchFactor - 1) >= 0.02) {
+    const semitones = 12 * Math.log2(pitchFactor);
+    const kind = semitones > 0 ? "raised" : "lowered";
+    return `Detected edit: pitch ${kind} ${Math.abs(semitones).toFixed(1)} semitones`;
+  }
+  return null;
 }
 
 function formatTimestamp(seconds: number | null): string {
