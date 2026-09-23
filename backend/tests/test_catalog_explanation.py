@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +93,7 @@ def test_recognize_file_with_explanation_reuses_matching_evidence(
     analysis, rows, hashes = _analysis_and_catalog(config)
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
-    with _database(tmp_path, rows) as connection:
+    with closing(_database(tmp_path, rows)) as connection:
         response = catalog.recognize_file_with_explanation(
             catalog.Path("query.wav"), connection, config
         )
@@ -143,7 +144,7 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
     )
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
-    with _database(tmp_path, []) as connection:
+    with closing(_database(tmp_path, [])) as connection:
         response = catalog.recognize_file_with_explanation(
             catalog.Path("query.wav"), connection, config
         )
@@ -194,7 +195,7 @@ def test_hashes_without_an_accepted_offset_explain_the_no_match(
     ]
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
-    with _database(tmp_path, rows) as connection:
+    with closing(_database(tmp_path, rows)) as connection:
         response = catalog.recognize_file_with_explanation(
             catalog.Path("query.wav"), connection, config
         )

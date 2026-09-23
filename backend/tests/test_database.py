@@ -1,3 +1,4 @@
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ def test_database_initialization_creates_indexed_schema(tmp_path: Path) -> None:
 
     initialize_database(database_path)
 
-    with connect_database(database_path) as connection:
+    with closing(connect_database(database_path)) as connection:
         tables = {
             row[0]
             for row in connection.execute(
