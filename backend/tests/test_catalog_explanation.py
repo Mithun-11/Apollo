@@ -120,6 +120,11 @@ def test_recognize_file_with_explanation_reuses_matching_evidence(
         "matchingHashes": len(hashes),
         "winningVotes": recognition["matchCount"],
     }
+    assert explanation["decision"]["reason"] == "accepted"
+    assert explanation["decision"]["leadingVotes"] == recognition["matchCount"]
+    assert explanation["decision"]["clusteredOffsetVotes"]
+    assert explanation["pairExamples"]
+    assert explanation["candidateVotes"][0]["songName"] == "Source Song"
     assert explanation["matchedFingerprints"]
     assert all(
         match["sourceAnchorSeconds"] - match["queryAnchorSeconds"] == pytest.approx(3.0)
@@ -162,6 +167,7 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
     assert explanation["matchedFingerprints"] == []
     assert explanation["offsetVotes"] == []
     assert explanation["counts"]["fingerprints"] == 0
+    assert explanation["decision"]["reason"] == "no_fingerprints"
 
 
 def test_hashes_without_an_accepted_offset_explain_the_no_match(
@@ -205,3 +211,5 @@ def test_hashes_without_an_accepted_offset_explain_the_no_match(
     assert explanation["counts"]["matchingHashes"] == 1
     assert explanation["counts"]["winningVotes"] == 0
     assert explanation["offsetVotes"] == []
+    assert explanation["decision"]["reason"] == "below_threshold"
+    assert explanation["decision"]["leadingVotes"] == 1

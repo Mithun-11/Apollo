@@ -10,6 +10,7 @@ from app.services.signal import (
     FingerprintTrace,
     Peak,
     SignalConfig,
+    analyze_fingerprint_match,
     create_fingerprints,
     create_fingerprints_with_traces,
     extract_peaks,
@@ -122,8 +123,7 @@ def test_match_fingerprints_returns_song_and_source_timestamp() -> None:
         Peak(frequency_bin=15, time_frame=8, amplitude_db=-4.0),
     )
     catalog_peaks = tuple(
-        Peak(peak.frequency_bin, peak.time_frame + 240, peak.amplitude_db)
-        for peak in query_peaks
+        Peak(peak.frequency_bin, peak.time_frame + 240, peak.amplitude_db) for peak in query_peaks
     )
     distractor_peaks = tuple(
         Peak(peak.frequency_bin + 100, peak.time_frame + 50, peak.amplitude_db)
@@ -207,6 +207,77 @@ def test_match_fingerprints_combines_adjacent_offset_frames() -> None:
     assert result.offset_frame == 100
     assert result.match_count == 3
     assert result.offset_votes == ((99, 2), (101, 1))
+
+
+def test_match_diagnostics_expose_the_same_clustered_winner_as_recognition() -> None:
+    config = SignalConfig(match_threshold=3, min_winner_ratio=2.0, offset_tolerance_frames=1)
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=index * 10, version=config.fingerprint_version)
+        for index in range(3)
+    )
+    catalog = {
+        "source-song": tuple(
+            Fingerprint(
+                fingerprint.hash_value, fingerprint.anchor_frame + shift, config.fingerprint_version
+            )
+            for fingerprint, shift in zip(query, (99, 99, 101), strict=True)
+        ),
+        "other-song": (
+            Fingerprint(
+                query[0].hash_value, query[0].anchor_frame + 200, config.fingerprint_version
+            ),
+        ),
+    }
+
+    diagnostics = analyze_fingerprint_match(query, catalog, config)
+
+    assert diagnostics.result == match_fingerprints(query, catalog, config)
+    assert diagnostics.reason == "accepted"
+    assert diagnostics.leading is not None
+    assert (
+        diagnostics.leading.song_id,
+        diagnostics.leading.offset_frame,
+        diagnostics.leading.votes,
+    ) == ("source-song", 100, 3)
+    assert diagnostics.raw_offset_votes == ((99, 2), (101, 1))
+    assert (100, 3) in diagnostics.clustered_offset_votes
+    assert diagnostics.runner_up_votes == 1
+
+
+def test_match_diagnostics_explain_threshold_and_competitor_rejections() -> None:
+    config = SignalConfig(match_threshold=3, min_winner_ratio=2.0)
+    query = tuple(
+        Fingerprint(f"hash-{index}", index, config.fingerprint_version) for index in range(3)
+    )
+    weak_catalog = {"weak": (Fingerprint(query[0].hash_value, 100, config.fingerprint_version),)}
+    tied_catalog = {
+        "a": tuple(
+            Fingerprint(item.hash_value, item.anchor_frame + 100, config.fingerprint_version)
+            for item in query
+        ),
+        "b": tuple(
+            Fingerprint(item.hash_value, item.anchor_frame + 200, config.fingerprint_version)
+            for item in query
+        ),
+    }
+
+    assert analyze_fingerprint_match(query, weak_catalog, config).reason == "below_threshold"
+    ambiguous = analyze_fingerprint_match(query, tied_catalog, config)
+    assert ambiguous.reason == "ambiguous"
+    assert ambiguous.result is None
+    assert ambiguous.leading is not None
+    assert ambiguous.leading.votes == ambiguous.runner_up_votes == 3
+
+
+def test_match_diagnostics_distinguish_hash_hits_with_impossible_offsets() -> None:
+    config = SignalConfig()
+    query = (Fingerprint("same-hash", anchor_frame=20, version=config.fingerprint_version),)
+    catalog = {
+        "song": (Fingerprint("same-hash", anchor_frame=10, version=config.fingerprint_version),)
+    }
+
+    assert analyze_fingerprint_match(query, catalog, config).reason == "no_valid_offsets"
+    assert analyze_fingerprint_match(query, {}, config).reason == "no_catalog_hits"
 
 
 def test_match_fingerprints_rejects_votes_below_absolute_threshold() -> None:

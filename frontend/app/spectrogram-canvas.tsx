@@ -52,7 +52,15 @@ function colorFor(value: number, minimum: number, maximum: number): [number, num
   }
 }
 
-export default function SpectrogramCanvas({ spectrogram }: { spectrogram: SpectrogramDisplay }) {
+export default function SpectrogramCanvas({
+  spectrogram,
+  cursorSeconds,
+  frequencyBand,
+}: {
+  spectrogram: SpectrogramDisplay;
+  cursorSeconds?: number;
+  frequencyBand?: { minimum: number; maximum: number };
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -205,16 +213,26 @@ export default function SpectrogramCanvas({ spectrogram }: { spectrogram: Spectr
 
   return (
     <figure className="chart-figure">
-      <canvas
-        ref={canvasRef}
-        className="spectrogram-canvas"
-        role="img"
-        aria-label="Query STFT spectrogram showing frequency content over time"
-      />
+      <div className="spectrogram-frame">
+        <canvas
+          ref={canvasRef}
+          className="spectrogram-canvas"
+          role="img"
+          aria-label="Query STFT spectrogram showing frequency content over time"
+        />
+        {frequencyBand && <span className="spectrogram-band" style={{
+          top: `${(PLOT_TOP + (1 - frequencyBand.maximum / spectrogram.maximumFrequencyHz) * (CANVAS_HEIGHT - PLOT_TOP - PLOT_BOTTOM)) / CANVAS_HEIGHT * 100}%`,
+          bottom: `${(PLOT_BOTTOM + frequencyBand.minimum / spectrogram.maximumFrequencyHz * (CANVAS_HEIGHT - PLOT_TOP - PLOT_BOTTOM)) / CANVAS_HEIGHT * 100}%`,
+          left: `${PLOT_LEFT / CANVAS_WIDTH * 100}%`,
+          right: `${PLOT_RIGHT / CANVAS_WIDTH * 100}%`,
+        }} aria-hidden="true" />}
+        {cursorSeconds !== undefined && <span className="spectrogram-cursor" style={{ left: `${(PLOT_LEFT + Math.min(1, cursorSeconds / Math.max(spectrogram.durationSeconds, .001)) * (CANVAS_WIDTH - PLOT_LEFT - PLOT_RIGHT)) / CANVAS_WIDTH * 100}%` }} aria-hidden="true" />}
+      </div>
       <p className="chart-caption">
         Duration: {spectrogram.durationSeconds.toFixed(2)} s · Max frequency:{" "}
         {Math.round(spectrogram.maximumFrequencyHz).toLocaleString()} Hz ·
         Darker = louder (dB scale from {spectrogram.minimumDb} to {spectrogram.maximumDb} dB)
+        {frequencyBand && ` · Peak search band: ${frequencyBand.minimum}–${frequencyBand.maximum.toLocaleString()} Hz`}
       </p>
     </figure>
   );

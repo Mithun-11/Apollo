@@ -82,6 +82,24 @@ class MatchResult:
     offset_votes: tuple[tuple[int, int], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateScore:
+    song_id: str
+    offset_frame: int
+    votes: int
+
+
+@dataclass(frozen=True, slots=True)
+class MatchDiagnostics:
+    result: MatchResult | None
+    reason: str
+    leading: CandidateScore | None
+    runner_up_votes: int
+    candidates: tuple[CandidateScore, ...]
+    raw_offset_votes: tuple[tuple[int, int], ...]
+    clustered_offset_votes: tuple[tuple[int, int], ...]
+
+
 def load_audio(path: str | Path, config: SignalConfig = DEFAULT_CONFIG) -> AudioData:
     """Decode an audio file, convert it to mono, resample, and peak-normalize it."""
     samples, _ = librosa.load(path, sr=config.sample_rate, mono=True, dtype=np.float32)
@@ -229,8 +247,17 @@ def match_fingerprints(
     taken from inside a song and are ignored. A winner needs ``match_threshold`` votes and
     ``min_winner_ratio`` times the votes of the strongest competing song.
     """
+    return analyze_fingerprint_match(query, catalog, config).result
+
+
+def analyze_fingerprint_match(
+    query: Sequence[Fingerprint],
+    catalog: Mapping[str, Sequence[Fingerprint]],
+    config: SignalConfig = DEFAULT_CONFIG,
+) -> MatchDiagnostics:
+    """Return the ordinary match and the votes needed to explain its decision."""
     if not query:
-        return None
+        return MatchDiagnostics(None, "no_fingerprints", None, 0, (), (), ())
     if any(fingerprint.version != config.fingerprint_version for fingerprint in query):
         raise ValueError("Query fingerprint version does not match the signal configuration")
 
@@ -248,7 +275,9 @@ def match_fingerprints(
                 votes[(song_id, offset)] += 1
 
     if not votes:
-        return None
+        has_hash_hits = any(fingerprint.hash_value in index for fingerprint in query)
+        reason = "no_valid_offsets" if has_hash_hits else "no_catalog_hits"
+        return MatchDiagnostics(None, reason, None, 0, (), (), ())
     tolerance = config.offset_tolerance_frames
     clustered_votes: Counter[tuple[str, int]] = Counter()
     for (candidate, offset), count in votes.items():
@@ -259,9 +288,6 @@ def match_fingerprints(
         clustered_votes.items(),
         key=lambda item: (-item[1], -votes[item[0]], item[0][0], item[0][1]),
     )
-    if match_count < config.match_threshold:
-        return None
-
     runner_up_match_count = max(
         (
             count
@@ -270,20 +296,59 @@ def match_fingerprints(
         ),
         default=0,
     )
-    if match_count < runner_up_match_count * config.min_winner_ratio:
-        return None
-
-    offset_votes = tuple(
+    best_by_song: dict[str, CandidateScore] = {}
+    for (candidate, offset), count in clustered_votes.items():
+        current = best_by_song.get(candidate)
+        if current is None or (-count, -votes[(candidate, offset)], offset) < (
+            -current.votes,
+            -votes[(candidate, current.offset_frame)],
+            current.offset_frame,
+        ):
+            best_by_song[candidate] = CandidateScore(candidate, offset, count)
+    candidates = tuple(
+        sorted(
+            best_by_song.values(),
+            key=lambda item: (-item.votes, item.song_id != song_id, item.song_id),
+        )
+    )
+    raw_offset_votes = tuple(
         sorted(
             (offset, count)
             for (candidate, offset), count in votes.items()
             if candidate == song_id
         )
     )
-    return MatchResult(
-        song_id=song_id,
-        timestamp_seconds=offset_frame * config.hop_length / config.sample_rate,
-        match_count=match_count,
-        offset_frame=offset_frame,
-        offset_votes=offset_votes,
+    leading_clustered_votes = tuple(
+        sorted(
+            (offset, count)
+            for (candidate, offset), count in clustered_votes.items()
+            if candidate == song_id
+        )
+    )
+    leading = CandidateScore(song_id, offset_frame, match_count)
+    if match_count < config.match_threshold:
+        reason = "below_threshold"
+    elif match_count < runner_up_match_count * config.min_winner_ratio:
+        reason = "ambiguous"
+    else:
+        reason = "accepted"
+    result = (
+        MatchResult(
+            song_id=song_id,
+            timestamp_seconds=offset_frame * config.hop_length / config.sample_rate,
+            match_count=match_count,
+            offset_frame=offset_frame,
+            offset_votes=raw_offset_votes,
+        )
+        if reason == "accepted"
+        else None
+    )
+    return MatchDiagnostics(
+        result,
+        reason,
+        leading,
+        runner_up_match_count,
+        candidates,
+        raw_offset_votes,
+        leading_clustered_votes,
     )

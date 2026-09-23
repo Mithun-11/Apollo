@@ -29,6 +29,7 @@ from .services.signal import (
     MatchResult,
     Peak,
     SignalConfig,
+    analyze_fingerprint_match,
     create_fingerprints,
     create_fingerprints_with_traces,
     extract_peaks,
@@ -204,7 +205,8 @@ def recognize_file_with_explanation(
     """Recognize a query and return bounded signal and matching evidence."""
     analysis = analyze_query_file(path, config)
     catalog = fetch_matching_catalog(analysis.fingerprints, connection, config)
-    result = match_fingerprints(analysis.fingerprints, catalog, config)
+    diagnostics = analyze_fingerprint_match(analysis.fingerprints, catalog, config)
+    result = diagnostics.result
 
     catalog_hashes = {
         fingerprint.hash_value
@@ -272,6 +274,37 @@ def recognize_file_with_explanation(
         config,
         matched_traces=winning_traces,
     )
+    frame_seconds = config.hop_length / config.sample_rate
+    frequency_hz_per_bin = config.sample_rate / config.n_fft
+    pair_step = max(1, len(analysis.traces) // 12)
+    pair_examples = [
+        {
+            "anchorSeconds": trace.fingerprint.anchor_frame * frame_seconds,
+            "targetSeconds": trace.target_frame * frame_seconds,
+            "anchorFrequencyHz": trace.anchor_frequency_bin * frequency_hz_per_bin,
+            "targetFrequencyHz": trace.target_frequency_bin * frequency_hz_per_bin,
+            "deltaFrames": trace.target_frame - trace.fingerprint.anchor_frame,
+        }
+        for trace in analysis.traces[::pair_step][:12]
+    ]
+    leading = diagnostics.leading
+    candidate_votes = [
+        {
+            "songName": _fetch_song(candidate.song_id, connection)["name"],
+            "votes": candidate.votes,
+            "offsetSeconds": candidate.offset_frame * frame_seconds,
+        }
+        for candidate in diagnostics.candidates[:3]
+    ]
+    clustered_offset_votes = (
+        build_offset_vote_display(
+            diagnostics.clustered_offset_votes,
+            leading.offset_frame,
+            config,
+        )
+        if leading is not None
+        else []
+    )
     return {
         "recognition": recognition,
         "explanation": {
@@ -311,7 +344,37 @@ def recognize_file_with_explanation(
                 "winningVotes": result.match_count if result is not None else 0,
             },
             "matchThreshold": config.match_threshold,
-            "candidateVotes": [],
+            "signalConfig": {
+                "fftSize": config.n_fft,
+                "hopLength": config.hop_length,
+                "minimumFrequencyHz": config.min_frequency_hz,
+                "maximumFrequencyHz": config.max_frequency_hz,
+                "peakFloorDb": config.peak_amplitude_threshold_db,
+                "peaksPerSecond": config.peaks_per_second,
+                "fanOut": config.fan_out,
+                "fingerprintVersion": config.fingerprint_version,
+            },
+            "pairExamples": pair_examples,
+            "decision": {
+                "reason": diagnostics.reason,
+                "leadingVotes": leading.votes if leading is not None else 0,
+                "leadingOffsetSeconds": (
+                    leading.offset_frame * frame_seconds if leading is not None else None
+                ),
+                "runnerUpVotes": diagnostics.runner_up_votes,
+                "minimumVotes": config.match_threshold,
+                "minimumWinnerRatio": config.min_winner_ratio,
+                "offsetToleranceFrames": config.offset_tolerance_frames,
+                "clusteredOffsetVotes": [
+                    {
+                        "offsetSeconds": vote.offset_seconds,
+                        "count": vote.count,
+                        "winning": vote.winning,
+                    }
+                    for vote in clustered_offset_votes
+                ],
+            },
+            "candidateVotes": candidate_votes,
             "processingTimesMs": None,
         },
     }

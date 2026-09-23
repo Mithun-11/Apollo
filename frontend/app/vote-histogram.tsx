@@ -21,17 +21,19 @@ export default function VoteHistogram({
   votes,
   threshold,
   timestampSeconds,
+  accepted,
 }: {
   votes: OffsetVoteDisplay[];
   threshold: number;
   timestampSeconds: number | null;
+  accepted?: boolean;
 }) {
   const visible = votes.slice(0, MAX_RENDERED_BARS);
   if (visible.length === 0) {
     return (
       <div>
-        <p className="empty-chart">No accepted offset votes are available for this recording.</p>
-        <p className="chart-caption">Apollo did not accept a winning source offset.</p>
+        <p className="empty-chart">No catalog fingerprint votes are available for this recording.</p>
+        <p className="chart-caption">There is no candidate offset to compare with the decision threshold.</p>
       </div>
     );
   }
@@ -127,7 +129,7 @@ export default function VoteHistogram({
               <line x1={wx} y1={TOP} x2={wx} y2={TOP + PH}
                 stroke="#d97706" strokeWidth="1.5" strokeDasharray="4 3" />
               <text x={wx + 4} y={TOP + 14} fill="#92400e" fontSize="11" fontWeight="700">
-                winner
+                  {accepted ? "accepted" : "leading"}
               </text>
             </>
           );
@@ -169,7 +171,7 @@ export default function VoteHistogram({
       <p className="chart-caption">
         {timestampSeconds === null
           ? "Apollo did not accept a winning source offset."
-          : `Winning offset: ${fmt(timestampSeconds)} · threshold: ${threshold} aligned votes.`}
+          : `${accepted ? "Accepted" : "Leading"} offset: ${fmt(timestampSeconds)} · minimum: ${threshold} clustered votes.`}
       </p>
 
       {/* Fallback text list */}
@@ -179,7 +181,7 @@ export default function VoteHistogram({
           .slice(0, 5)
           .map((v) => (
             <li key={`${v.offsetSeconds}-fallback`}>
-              {fmt(v.offsetSeconds)}: <strong>{v.count}</strong> votes{v.winning ? " 🏆 (winner)" : ""}
+              {fmt(v.offsetSeconds)}: <strong>{v.count}</strong> clustered votes{v.winning ? accepted ? " (accepted)" : " (leading)" : ""}
             </li>
           ))}
       </ol>

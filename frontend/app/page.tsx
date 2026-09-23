@@ -55,6 +55,8 @@ type RecordingSession = {
   tickTimerId: number | null;
 };
 
+type CheckEvent = { seconds: number; text: string };
+
 function isConfirmedMatch(
   previous: RecognitionResponse | null,
   current: RecognitionResponse,
@@ -202,6 +204,8 @@ export default function Home() {
   const [state, setState] = useState<RecognitionState>({ phase: "ready" });
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [volume, setVolume] = useState(0);
+  const [checkMessage, setCheckMessage] = useState("Waiting for the first check at 2 seconds");
+  const [checks, setChecks] = useState<CheckEvent[]>([]);
   const chunks = useRef<Float32Array[]>([]);
   const liveSamplesRef = useRef<Float32Array>(new Float32Array(0));
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -310,6 +314,8 @@ export default function Home() {
     busy.current = true;
     replacePlaybackUrl(null);
     setVolume(0);
+    setChecks([]);
+    setCheckMessage("Waiting for the first check at 2 seconds");
     if (!keeper.isReady()) setState({ phase: "starting-microphone" });
     let session: RecordingSession | null = null;
     let microphone: Microphone | null = null;
@@ -362,14 +368,21 @@ export default function Home() {
           }
           checkInFlight = true;
           lastCheckSeconds = elapsedSeconds;
+          setCheckMessage(`Checking ${elapsedSeconds.toFixed(1)} seconds of audio…`);
           recognizeAudio(encodeWav(chunks.current, sampleRate))
             .then((response) => {
-              if (isConfirmedMatch(previousCheck, response)) activeSession.finish();
+              if (!capturing.current || unmounted.current) return;
+              const confirmed = isConfirmedMatch(previousCheck, response);
+              const text = confirmed ? "Stable match confirmed" : response.matched ? "Possible match; checking again" : "No stable match yet";
+              setCheckMessage(text);
+              setChecks((current) => [...current, { seconds: elapsedSeconds, text }].slice(-4));
+              if (confirmed) activeSession.finish();
               previousCheck = response.matched ? response : null;
             })
             .catch(() => {
               // A failed early check only delays the answer; the final request reports errors.
               previousCheck = null;
+              if (capturing.current && !unmounted.current) setCheckMessage("Check unavailable; continuing to listen");
             })
             .finally(() => {
               checkInFlight = false;
@@ -428,8 +441,8 @@ export default function Home() {
     <main className="page-shell">
       <section className="card" aria-labelledby="title">
         <p className="eyebrow">APOLLO</p>
-        <h1 id="title">What’s playing?</h1>
-        <p className="subtitle">Listen to a nearby recording and find its Spotify track.</p>
+        <h1 id="title">Hear the answer.<br /><span>See the signal.</span></h1>
+        <p className="subtitle">Recognize a nearby song, then explore the real waveform, frequencies, fingerprints and votes behind the match.</p>
         <button
           type="button"
           onClick={listen}
@@ -446,8 +459,11 @@ export default function Home() {
         <p className="status" aria-live="polite">{status}</p>
         {state.phase === "recording" ? (
           <div className="live-input">
+            <div className="live-head"><span>LIVE MICROPHONE SIGNAL</span><strong>{state.elapsedSeconds}s / {MAX_RECORDING_SECONDS}s</strong></div>
             <LiveWaveform samplesRef={liveSamplesRef} />
-            <p className="volume-label">Input level: {Math.round(Math.min(1, volume) * 100)}%</p>
+            <div className="live-progress" role="progressbar" aria-label="Recording duration" aria-valuenow={state.elapsedSeconds} aria-valuemin={0} aria-valuemax={MAX_RECORDING_SECONDS}><span style={{ width: `${Math.min(100, state.elapsedSeconds / MAX_RECORDING_SECONDS * 100)}%` }} /></div>
+            <p className="volume-label">Input level: {Math.round(Math.min(1, volume) * 100)}% · {checkMessage}</p>
+            {checks.length > 0 && <ol className="check-list" aria-label="Recent recognition checks">{checks.map((check, index) => <li key={`${check.seconds}-${index}`}><time>{check.seconds.toFixed(1)}s</time><span>{check.text}</span></li>)}</ol>}
           </div>
         ) : null}
         {playbackUrl ? (

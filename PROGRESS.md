@@ -69,6 +69,13 @@ floor must be re-measured when:
 - **Why the whole clip:** votes accumulate, pairs span up to 1.5 s, and every check shares the
   same start, so a real match repeats the same timestamp while a chance match does not. Server
   time per check is 0.04 s for 2 s of audio and about 0.2 s for 15 s.
+- **Signal story UI (2026-09-23):** the listening screen now reports real intermediate check
+  outcomes. The final `/recognize/explain` response drives a seven-step replay with waveform,
+  spectrogram, peaks, query fingerprint pairs, indexed lookup summary, alignment, and clustered
+  offset votes. The replay is explanatory and runs after capture; it does not change or delay the
+  matching algorithm. The explanation response includes bounded pair examples, top candidate
+  vote totals, and the exact acceptance/rejection reason. Reduced-motion users can step through
+  the same evidence without animation. Recognition checks still use `/recognize` as before.
 
 ## Catalog workflow
 

@@ -22,10 +22,12 @@ export default function ConstellationPlot({
   peaks,
   durationSeconds,
   maximumFrequencyHz,
+  cursorSeconds,
 }: {
   peaks: PeakDisplay[];
   durationSeconds: number;
   maximumFrequencyHz: number;
+  cursorSeconds?: number;
 }) {
   const visible = peaks.slice(0, MAX_RENDERED_PEAKS);
   const dur   = durationSeconds    || 1;
@@ -89,6 +91,7 @@ export default function ConstellationPlot({
 
         {/* Border */}
         <rect x={LEFT} y={TOP} width={PW} height={PH} fill="none" stroke="#d1d5db" strokeWidth="1" rx="2" />
+        {cursorSeconds !== undefined && <line x1={LEFT + clamp(cursorSeconds / dur) * PW} x2={LEFT + clamp(cursorSeconds / dur) * PW} y1={TOP} y2={TOP + PH} stroke="#d97706" strokeWidth="2" />}
 
         {/* Time axis ticks + labels */}
         {Array.from({ length: timeTickCount + 1 }, (_, i) => {

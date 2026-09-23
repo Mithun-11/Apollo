@@ -48,6 +48,20 @@ export type OffsetVoteDisplay = {
   winning: boolean;
 };
 
+export type PairExample = {
+  anchorSeconds: number;
+  targetSeconds: number;
+  anchorFrequencyHz: number;
+  targetFrequencyHz: number;
+  deltaFrames: number;
+};
+
+export type CandidateVote = {
+  songName: string;
+  votes: number;
+  offsetSeconds: number;
+};
+
 export type RecognitionExplanation = {
   queryDurationSeconds: number;
   sampleRate: number;
@@ -67,7 +81,28 @@ export type RecognitionExplanation = {
     winningVotes: number;
   };
   matchThreshold: number;
-  candidateVotes: unknown[];
+  signalConfig: {
+    fftSize: number;
+    hopLength: number;
+    minimumFrequencyHz: number;
+    maximumFrequencyHz: number;
+    peakFloorDb: number;
+    peaksPerSecond: number;
+    fanOut: number;
+    fingerprintVersion: string;
+  };
+  pairExamples: PairExample[];
+  decision: {
+    reason: "accepted" | "no_fingerprints" | "no_catalog_hits" | "no_valid_offsets" | "below_threshold" | "ambiguous";
+    leadingVotes: number;
+    leadingOffsetSeconds: number | null;
+    runnerUpVotes: number;
+    minimumVotes: number;
+    minimumWinnerRatio: number;
+    offsetToleranceFrames: number;
+    clusteredOffsetVotes: OffsetVoteDisplay[];
+  };
+  candidateVotes: CandidateVote[];
   processingTimesMs: Record<string, number> | null;
 };
 
