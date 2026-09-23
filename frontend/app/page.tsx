@@ -18,15 +18,10 @@ const CHECK_INTERVAL_SECONDS = 1;
 const TIMER_TICK_MS = 250;
 // Both checks start at the same moment in the song, so their timestamps must agree.
 const TIMESTAMP_AGREEMENT_SECONDS = 0.25;
-// Browser voice processing (echo cancellation, noise suppression, gain control) is tuned for
-// speech and distorts music, so the recording keeps the raw microphone signal.
+// Use the browser's device defaults. Explicit mono/raw constraints left the built-in
+// microphone array unusable on a Windows laptop where audio: true records correctly.
 const MICROPHONE_CONSTRAINTS: MediaStreamConstraints = {
-  audio: {
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-  },
+  audio: true,
 };
 const RECORDER_WORKLET = `
 class ApolloRecorderProcessor extends AudioWorkletProcessor {

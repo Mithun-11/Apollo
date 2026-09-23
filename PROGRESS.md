@@ -54,8 +54,10 @@ floor must be re-measured when:
 
 ## Frontend behaviour (`frontend/app/page.tsx`)
 
-- **Raw microphone:** `echoCancellation`, `noiseSuppression` and `autoGainControl` are off. They
-  are tuned for speech and distort music.
+- **Microphone capture:** request `{ audio: true }` so the browser uses the selected device's
+  defaults. The earlier explicit mono/raw constraints left a built-in Windows microphone array
+  silent in Apollo while the same device recorded on `improveDetectionAlgo` with `{ audio: true }`.
+  Browser voice processing may affect music fingerprints; test real recordings on both microphones.
 - **Warm microphone** (`MicrophoneKeeper`): when mic permission is already granted, the mic and
   the AudioWorklet recorder are opened on page load and the AudioContext is suspended. Listen only
   calls `resume()`, which is instant. The mic is released while the tab is hidden. The trade-off is
