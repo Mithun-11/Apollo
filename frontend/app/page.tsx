@@ -41,21 +41,23 @@ registerProcessor("apollo-recorder", ApolloRecorderProcessor);
 
 type RecognitionState =
   | { phase: "ready" }
-  | { phase: "requesting-permission" }
+  | { phase: "starting-microphone" }
   | { phase: "recording"; elapsedSeconds: number }
   | { phase: "processing" }
   | { phase: "complete"; response: RecognitionExplanationResponse }
   | { phase: "error"; message: string };
 
-type RecordingSession = {
+type Microphone = {
   stream: MediaStream;
   context: AudioContext;
   source: MediaStreamAudioSourceNode;
   recorder: AudioWorkletNode;
   silentOutput: GainNode;
+};
+
+type RecordingSession = {
   finish: () => void;
   tickTimerId: number | null;
-  cleaned: boolean;
 };
 
 function isConfirmedMatch(
@@ -105,17 +107,100 @@ function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function cleanupRecordingSession(session: RecordingSession): Promise<void> {
-  if (session.cleaned) return;
-  session.cleaned = true;
-  if (session.tickTimerId !== null) window.clearInterval(session.tickTimerId);
-  session.recorder.port.onmessage = null;
-  session.recorder.disconnect();
-  session.recorder.port.close();
-  session.silentOutput.disconnect();
-  session.source.disconnect();
-  session.stream.getTracks().forEach((track) => track.stop());
-  await session.context.close();
+async function openMicrophone(onSamples: (samples: Float32Array) => void): Promise<Microphone> {
+  const stream = await navigator.mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS);
+  const context = new AudioContext();
+  try {
+    if (!context.audioWorklet) {
+      throw new Error("This browser does not support AudioWorklet recording.");
+    }
+    const workletUrl = URL.createObjectURL(
+      new Blob([RECORDER_WORKLET], { type: "application/javascript" }),
+    );
+    try {
+      await context.audioWorklet.addModule(workletUrl);
+    } finally {
+      URL.revokeObjectURL(workletUrl);
+    }
+    const source = context.createMediaStreamSource(stream);
+    const recorder = new AudioWorkletNode(context, "apollo-recorder");
+    const silentOutput = context.createGain();
+    silentOutput.gain.value = 0;
+    recorder.port.onmessage = (event: MessageEvent<Float32Array>) => {
+      onSamples(new Float32Array(event.data));
+    };
+    source.connect(recorder);
+    recorder.connect(silentOutput);
+    silentOutput.connect(context.destination);
+    // Idle until Listen: a suspended context uses no CPU and resumes within milliseconds.
+    await context.suspend();
+    return { stream, context, source, recorder, silentOutput };
+  } catch (error) {
+    stream.getTracks().forEach((track) => track.stop());
+    await context.close();
+    throw error;
+  }
+}
+
+function isMicrophoneLive(microphone: Microphone): boolean {
+  return (
+    microphone.context.state !== "closed" &&
+    microphone.stream.getAudioTracks().some((track) => track.readyState === "live")
+  );
+}
+
+async function closeMicrophone(microphone: Microphone): Promise<void> {
+  microphone.recorder.port.onmessage = null;
+  microphone.recorder.disconnect();
+  microphone.recorder.port.close();
+  microphone.silentOutput.disconnect();
+  microphone.source.disconnect();
+  microphone.stream.getTracks().forEach((track) => track.stop());
+  if (microphone.context.state !== "closed") await microphone.context.close();
+}
+
+/**
+ * Keeps one opened microphone ready, like a video call does, so Listen starts instantly.
+ * Opening the device and loading the recorder takes a second or two, which previously
+ * happened on every press.
+ */
+class MicrophoneKeeper {
+  private opening: Promise<Microphone> | null = null;
+  private ready: Microphone | null = null;
+
+  constructor(private readonly onSamples: (samples: Float32Array) => void) {}
+
+  isReady(): boolean {
+    return this.ready !== null && isMicrophoneLive(this.ready);
+  }
+
+  acquire(): Promise<Microphone> {
+    if (this.ready && !isMicrophoneLive(this.ready)) this.release();
+    if (this.opening) return this.opening;
+    const opening: Promise<Microphone> = openMicrophone(this.onSamples).then(
+      (microphone) => {
+        if (this.opening !== opening) {
+          void closeMicrophone(microphone);
+          throw new Error("The microphone was released while it was starting.");
+        }
+        this.ready = microphone;
+        return microphone;
+      },
+      (error: unknown) => {
+        if (this.opening === opening) this.opening = null;
+        throw error;
+      },
+    );
+    this.opening = opening;
+    return opening;
+  }
+
+  release(): void {
+    const microphone = this.ready;
+    this.opening = null;
+    this.ready = null;
+    if (microphone) void closeMicrophone(microphone);
+  }
 }
 
 export default function Home() {
@@ -125,6 +210,8 @@ export default function Home() {
   const chunks = useRef<Float32Array[]>([]);
   const liveSamplesRef = useRef<Float32Array>(new Float32Array(0));
   const sessionRef = useRef<RecordingSession | null>(null);
+  const microphoneRef = useRef<MicrophoneKeeper | null>(null);
+  const capturing = useRef(false);
   const playbackUrlRef = useRef<string | null>(null);
   const lastVolumeUpdate = useRef(0);
   const unmounted = useRef(false);
@@ -137,9 +224,63 @@ export default function Home() {
       const session = sessionRef.current;
       if (session) {
         session.finish();
-        void cleanupRecordingSession(session);
+        if (session.tickTimerId !== null) window.clearInterval(session.tickTimerId);
       }
       if (playbackUrlRef.current) URL.revokeObjectURL(playbackUrlRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const keeper = new MicrophoneKeeper((chunk) => {
+      if (!capturing.current) return;
+      chunks.current.push(chunk);
+      liveSamplesRef.current = chunk;
+      const now = performance.now();
+      if (now - lastVolumeUpdate.current >= 100) {
+        const sumSquares = chunk.reduce((sum, sample) => sum + sample * sample, 0);
+        setVolume(chunk.length > 0 ? Math.sqrt(sumSquares / chunk.length) : 0);
+        lastVolumeUpdate.current = now;
+      }
+    });
+    microphoneRef.current = keeper;
+    let active = true;
+
+    // Warm up only when permission was already granted, so the page never prompts on load.
+    const warmUp = async () => {
+      if (
+        document.visibilityState !== "visible" ||
+        !navigator.mediaDevices?.getUserMedia ||
+        !navigator.permissions
+      ) {
+        return;
+      }
+      const permission = await navigator.permissions.query({
+        name: "microphone" as PermissionName,
+      });
+      if (active && permission.state === "granted") await keeper.acquire();
+    };
+    const warmUpInBackground = () => {
+      warmUp().catch((error: unknown) => {
+        // Listen opens the microphone itself when the background warm-up is unavailable.
+        console.debug("Microphone warm-up skipped", error);
+      });
+    };
+    // Free the microphone while the tab is hidden so the browser's mic indicator turns off.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        if (!capturing.current) keeper.release();
+      } else {
+        warmUpInBackground();
+      }
+    };
+
+    warmUpInBackground();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      keeper.release();
+      if (microphoneRef.current === keeper) microphoneRef.current = null;
     };
   }, []);
 
@@ -158,12 +299,14 @@ export default function Home() {
     if (
       busy.current ||
       sessionRef.current ||
-      state.phase === "requesting-permission" ||
+      state.phase === "starting-microphone" ||
       state.phase === "recording" ||
       state.phase === "processing"
     ) {
       return;
     }
+    const keeper = microphoneRef.current;
+    if (!keeper) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       setState({ phase: "error", message: "This browser does not support microphone access." });
       return;
@@ -171,60 +314,25 @@ export default function Home() {
 
     busy.current = true;
     replacePlaybackUrl(null);
-    chunks.current = [];
-    liveSamplesRef.current = new Float32Array(0);
     setVolume(0);
-    setState({ phase: "requesting-permission" });
-    let stream: MediaStream | undefined;
-    let context: AudioContext | undefined;
+    if (!keeper.isReady()) setState({ phase: "starting-microphone" });
     let session: RecordingSession | null = null;
+    let microphone: Microphone | null = null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS);
-      context = new AudioContext();
-      if (!context.audioWorklet) {
-        throw new Error("This browser does not support AudioWorklet recording.");
+      microphone = await keeper.acquire();
+      if (!isMicrophoneLive(microphone)) {
+        keeper.release();
+        microphone = await keeper.acquire();
       }
-      const workletUrl = URL.createObjectURL(
-        new Blob([RECORDER_WORKLET], { type: "application/javascript" }),
-      );
-      try {
-        await context.audioWorklet.addModule(workletUrl);
-      } finally {
-        URL.revokeObjectURL(workletUrl);
-      }
-
-      const source = context.createMediaStreamSource(stream);
-      const recorder = new AudioWorkletNode(context, "apollo-recorder");
-      const silentOutput = context.createGain();
-      silentOutput.gain.value = 0;
-      session = {
-        stream,
-        context,
-        source,
-        recorder,
-        silentOutput,
-        finish: () => undefined,
-        tickTimerId: null,
-        cleaned: false,
-      };
+      await microphone.context.resume();
+      chunks.current = [];
+      liveSamplesRef.current = new Float32Array(0);
+      capturing.current = true;
+      session = { finish: () => undefined, tickTimerId: null };
       sessionRef.current = session;
-      recorder.port.onmessage = (event: MessageEvent<Float32Array>) => {
-        const chunk = new Float32Array(event.data);
-        chunks.current.push(chunk);
-        liveSamplesRef.current = chunk;
-        const now = performance.now();
-        if (now - lastVolumeUpdate.current >= 100) {
-          const sumSquares = chunk.reduce((sum, sample) => sum + sample * sample, 0);
-          setVolume(chunk.length > 0 ? Math.sqrt(sumSquares / chunk.length) : 0);
-          lastVolumeUpdate.current = now;
-        }
-      };
-      source.connect(recorder);
-      recorder.connect(silentOutput);
-      silentOutput.connect(context.destination);
       setState({ phase: "recording", elapsedSeconds: 0 });
       const activeSession = session;
-      const sampleRate = activeSession.context.sampleRate;
+      const sampleRate = microphone.context.sampleRate;
 
       const recordedChunks = await new Promise<Float32Array[]>((resolve) => {
         let resolved = false;
@@ -235,6 +343,8 @@ export default function Home() {
         activeSession.finish = () => {
           if (resolved) return;
           resolved = true;
+          if (activeSession.tickTimerId !== null) window.clearInterval(activeSession.tickTimerId);
+          activeSession.tickTimerId = null;
           resolve([...chunks.current]);
         };
         activeSession.tickTimerId = window.setInterval(() => {
@@ -272,10 +382,9 @@ export default function Home() {
         }, TIMER_TICK_MS);
       });
 
+      capturing.current = false;
       if (unmounted.current) return;
       setState({ phase: "processing" });
-      await cleanupRecordingSession(session);
-      sessionRef.current = null;
       const recording = encodeWav(recordedChunks, sampleRate);
       replacePlaybackUrl(recording);
       const response = await recognizeAudioWithExplanation(recording);
@@ -289,27 +398,27 @@ export default function Home() {
         });
       }
     } finally {
+      capturing.current = false;
       if (session) {
-        await cleanupRecordingSession(session);
+        if (session.tickTimerId !== null) window.clearInterval(session.tickTimerId);
         if (sessionRef.current === session) sessionRef.current = null;
-      } else {
-        stream?.getTracks().forEach((track) => track.stop());
-        await context?.close();
       }
+      // Keep the microphone open for the next Listen, but pause audio processing meanwhile.
+      if (microphone?.context.state === "running") await microphone.context.suspend();
       busy.current = false;
     }
   }
 
   const result = state.phase === "complete" ? state.response : null;
   const isBusy =
-    state.phase === "requesting-permission" ||
+    state.phase === "starting-microphone" ||
     state.phase === "recording" ||
     state.phase === "processing";
   const status =
     state.phase === "ready"
       ? "Ready to listen"
-      : state.phase === "requesting-permission"
-        ? "Requesting microphone permission…"
+      : state.phase === "starting-microphone"
+        ? "Starting microphone…"
         : state.phase === "recording"
           ? `Listening… ${state.elapsedSeconds}s (stops automatically once the song is recognized)`
           : state.phase === "processing"
