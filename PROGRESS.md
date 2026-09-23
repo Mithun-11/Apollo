@@ -11,10 +11,11 @@ Last updated: 2026-09-24. Current release is v3.
 | Area | State |
 |---|---|
 | Fingerprints | `fingerprint_version = "3"` in `backend/app/services/signal.py` (`SignalConfig`) |
-| Database | `data/apollo-v3.db`, the default path; not in Git; 6 songs |
-| Songs | Cold(feat. Future), Lukiye, Hall of Fame, Sparkle, Bus Sohokari, Ekanto Golaap |
+| Database | `data/apollo-v3.db`, the default path; not in Git; 21 songs, with melody features on `feature/melody-match` |
+| Songs | 21, listed in `D:\Signal Project\Song list.xlsx` |
 | Frontend | Microphone or browser-tab audio, streaming checks, early stop, and seven-step signal replay (`frontend/app/page.tsx`) |
 | Edits | Speed/pitch search fallback for nightcore, slowed, deep-voice edits (`backend/app/services/speed_search.py`) |
+| Other versions | Melody matching fallback for covers, live versions and crowds (`backend/app/services/melody_match.py`, optional Demucs) |
 | API | Same paths: `POST /songs`, `POST /recognize`, `POST /recognize/explain`; responses add `speedFactor` and `pitchFactor` |
 | CI | Windows and macOS verify jobs plus the dependency audit, all passing on `main` |
 
@@ -106,6 +107,61 @@ Speed edits alone from 0.80× to 1.30× were found 30/30 at every step tested.
   factor, so deep voice at −2 semitones dropped to 9/30 and −3 semitones to 0/30.
 - **Coarse pass with 1 target per anchor:** faster (1.55 s), but deep voice + reverb fell from
   16/18 to 12/18.
+
+## Melody matching for covers, live versions and crowds (`backend/app/services/melody_match.py`)
+
+Branch `feature/melody-match`. The last fallback, run only when fingerprints and the speed/pitch
+search both fail on at least 8 s of audio. A different performance shares no fingerprints with the
+catalog recording, but it keeps the melody and the harmony.
+
+```text
+query audio → Demucs htdemucs vocal separation (the only ML step; optional dependency)
+            → vocals: pYIN pitch contour (semitones, 10 fps, voiced frames only, median filter)
+            → vocals: CENS chroma (smoothing 11, ~10 fps);  full mix: CENS chroma (smoothing 21)
+            → each feature vs every song: 12 key shifts × subsequence DTW
+              (steps (1,1), (1,2), (2,1) = tempo 0.5–2×; mean cost per query frame)
+            → per feature, z-score of the costs across the catalog
+            → weighted sum (melody 1, vocal chroma 2, mix chroma 1) / 4
+            → accept the best song only if it beats the runner-up by ≥ 1.2
+              and at least 30% of the query is sung (voiced)
+```
+
+- **Storage:** table `melody_features` (one row per song, `feature_version` "melody-1"), built by
+  `python -m app.melody_catalog` from the Songs folder. Each file is identified by its fingerprints,
+  so no name mapping is needed. Existing tables are untouched.
+- **Optional:** `backend/requirements-melody.txt` (Demucs; install CUDA PyTorch first for a GPU).
+  Without it `vocal_separation.is_available()` is False and the fallback is skipped.
+- **Deterministic:** Demucs runs with `shifts=0`. Its default random time shift made `/recognize`
+  and `/recognize/explain` disagree on the same audio near the threshold.
+- **Response:** `matchMethod: "melody"`, `melodyScoreGap`, `keyShiftSemitones`; the timestamp is
+  where the vocal-chroma alignment starts in the song. The explanation adds `melodyMatch` (gap,
+  key shift, top 3). The frontend ignores these fields today.
+- **Cost (RTX 4060):** separation 0.4 s, features 0.4 s, matching 21 songs 0.2 s after warm-up;
+  the first call loads the model (~3 s). On a CPU, separation of 15 s takes about 3 s.
+
+**How it was measured.** 41 real cover/live/crowd versions of the 21 catalog songs from YouTube
+(acoustic covers, female covers, concert recordings, a flash mob), plus 6 songs not in the catalog
+(`Not in DB` folder) as negatives. Windows of 8, 12 and 15 s every 15 s from 15 s into each track.
+Prototype and harness: `D:\Signal Project\.melody-test` (outside the repo).
+
+| Per 15 s window (catalog of 21) | Correct song ranked first |
+|---|---|
+| Melody contour only | 70% |
+| Vocal chroma only | 80% |
+| Full-mix chroma only | 50% |
+| Melody + vocal chroma + mix chroma (1:2:1) | 84% (90% when ≥ 50% of the window is sung) |
+
+Session simulation (checks at 8, 12 and 15 s from the same start; accept on two agreeing checks or
+on the 15 s check, gap ≥ 1.2): 64% of cover/live sessions identified, 1 wrong in 328, and 0 false
+matches in 48 sessions of songs not in the catalog.
+
+**Tried and rejected.**
+
+- **Full-mix chroma alone:** 50% top-1; drums and new arrangements dominate. Kept at weight 1.
+- **Plain CQT chroma instead of CENS:** 67% vs 80% top-1 on vocals.
+- **Per-song impostor normalisation (Z-norm):** no gain over per-query z-scores.
+- **Accepting on the top score instead of the gap:** many more false matches.
+- **Smaller pYIN hop (50 ms) for speed:** pYIN lost most voiced frames; pYIN was never the cost.
 
 ## Frontend behaviour (`frontend/app/page.tsx`)
 
@@ -218,9 +274,10 @@ songs and timestamps. The streaming stop fired at a median of 4 s (max 6 s).
    chatter.
 6. **Speed-search cost:** about 2.4 s per search. Options include one deduplicated database
    lookup across candidates, or threaded lookups.
-7. **Not covered by any search:** re-sung covers, live versions and humming. These are different
-   recordings; candidates are chroma features with DTW alignment (signal-only) or learned
-   embeddings.
+7. **Melody matching limits:** about a third of cover/live sessions still end without a match,
+   mostly windows with little singing (instrumental breaks, crowd noise, talking). Humming and
+   rap are not targeted. The 1.2 gap was calibrated on a 21-song catalog; re-check it with the
+   `.melody-test` harness when songs are added, because z-scores depend on the catalog.
 8. **`filelock`** is installed through `pip_audit`'s file cache but is not pinned in
    `requirements.txt`. This predates v3 and is harmless.
 

@@ -17,3 +17,13 @@ CREATE TABLE IF NOT EXISTS acoustic_fingerprints (
 
 CREATE INDEX IF NOT EXISTS acoustic_fingerprint_lookup
 ON acoustic_fingerprints (fingerprint_version, hash_value);
+
+-- Optional melody features for recognizing covers and live versions (app/melody_catalog.py).
+CREATE TABLE IF NOT EXISTS melody_features (
+    song_id INTEGER PRIMARY KEY,
+    feature_version TEXT NOT NULL,
+    melody BLOB NOT NULL,
+    vocal_chroma BLOB NOT NULL,
+    mix_chroma BLOB NOT NULL,
+    FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
@@ -13,6 +14,7 @@ from .database import (
     db_int_to_fingerprint_hex,
     fingerprint_hex_to_db_int,
 )
+from .melody_catalog import melody_recognition_response, recognize_melody
 from .services.explanation import (
     build_offset_vote_display,
     build_peak_display,
@@ -20,6 +22,7 @@ from .services.explanation import (
     build_waveform_envelope,
     build_winning_fingerprint_evidence,
 )
+from .services.melody_match import MelodyMatch
 from .services.signal import (
     DEFAULT_CONFIG,
     Fingerprint,
@@ -47,6 +50,7 @@ FINGERPRINT_BATCH_SIZE = 500
 SUPPORTED_AUDIO_EXTENSIONS = {".flac", ".mp3", ".ogg", ".wav"}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SONGS_DIR = PROJECT_ROOT.parent / "Songs"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +216,12 @@ def recognize_file(
         config,
     )
     if speed_match is None:
-        return _no_match()
+        melody_match = _melody_fallback(path, connection)
+        if melody_match is None:
+            return _no_match()
+        return melody_recognition_response(
+            melody_match, _fetch_song(melody_match.song_id, connection)
+        )
     return _recognition_response(
         speed_match.result,
         len(speed_match.fingerprints),
@@ -247,6 +256,7 @@ def recognize_file_with_explanation(
             query_traces = speed_match.traces
             catalog = {song: list(prints) for song, prints in speed_match.catalog.items()}
             diagnostics = analyze_fingerprint_match(query_fingerprints, catalog, config)
+    melody_match = _melody_fallback(path, connection) if result is None else None
 
     catalog_hashes = {
         fingerprint.hash_value
@@ -258,7 +268,13 @@ def recognize_file_with_explanation(
     )
 
     if result is None:
-        recognition = _no_match()
+        recognition = (
+            _no_match()
+            if melody_match is None
+            else melody_recognition_response(
+                melody_match, _fetch_song(melody_match.song_id, connection)
+            )
+        )
         matched_fingerprints: list[dict[str, float]] = []
         offset_votes: list[dict[str, object]] = []
         source_interval: dict[str, float] | None = None
@@ -419,8 +435,34 @@ def recognize_file_with_explanation(
                 ],
             },
             "candidateVotes": candidate_votes,
+            "melodyMatch": _melody_explanation(melody_match, connection),
             "processingTimesMs": None,
         },
+    }
+
+
+def _melody_fallback(path: Path, connection: sqlite3.Connection) -> MelodyMatch | None:
+    """Try melody matching; any failure there must not break fingerprint recognition."""
+    try:
+        return recognize_melody(path, connection)
+    except Exception:
+        logger.exception("Melody matching failed; returning the fingerprint result")
+        return None
+
+
+def _melody_explanation(
+    match: MelodyMatch | None, connection: sqlite3.Connection
+) -> dict[str, object] | None:
+    if match is None:
+        return None
+    return {
+        "scoreGap": match.score_gap,
+        "keyShiftSemitones": match.key_shift_semitones,
+        "startSeconds": match.timestamp_seconds,
+        "ranking": [
+            {"songName": _fetch_song(song_id, connection)["name"], "score": score}
+            for song_id, score in match.ranking
+        ],
     }
 
 

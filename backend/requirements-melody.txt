@@ -1,0 +1,10 @@
+# Optional: melody matching of covers, live versions and crowds (app/services/vocal_separation.py).
+# Fingerprint recognition works without these packages; melody matching is skipped then.
+#
+# NVIDIA GPU (recommended, about 10x faster): install PyTorch for your CUDA version first, e.g.
+#   python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+# then:
+#   python -m pip install -r requirements-melody.txt
+# Build melody features for songs already in the database (from backend/):
+#   python -m app.melody_catalog
+demucs==4.1.0
