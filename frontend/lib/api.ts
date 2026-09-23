@@ -10,6 +10,9 @@ export type RecognitionResponse = {
   timestampSeconds: number | null;
   confidence: number;
   matchCount: number;
+  /** Recording speed and pitch relative to the song; both 1 unless an edit was detected. */
+  speedFactor?: number | null;
+  pitchFactor?: number | null;
 };
 
 export type WaveformEnvelopePoint = {

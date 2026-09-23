@@ -155,6 +155,8 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
         "timestampSeconds": None,
         "confidence": 0.0,
         "matchCount": 0,
+        "speedFactor": None,
+        "pitchFactor": None,
     }
     explanation = response["explanation"]
     assert isinstance(explanation, dict)

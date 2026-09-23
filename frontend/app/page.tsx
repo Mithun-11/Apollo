@@ -468,6 +468,9 @@ export default function Home() {
               Found at {formatTimestamp(result.recognition.timestampSeconds)}
             </p>
             <h2>{result.recognition.song.name}</h2>
+            {describeEdit(result.recognition) ? (
+              <p className="result-label">{describeEdit(result.recognition)}</p>
+            ) : null}
             <a href={result.recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
               Open in Spotify
             </a>
@@ -478,6 +481,19 @@ export default function Home() {
       </section>
     </main>
   );
+}
+
+function describeEdit({ speedFactor, pitchFactor }: RecognitionResponse): string | null {
+  if (speedFactor && Math.abs(speedFactor - 1) >= 0.02) {
+    const kind = speedFactor > 1 ? "sped up" : "slowed down";
+    return `Detected edit: ${kind} (played at ${speedFactor.toFixed(2)}×)`;
+  }
+  if (pitchFactor && Math.abs(pitchFactor - 1) >= 0.02) {
+    const semitones = 12 * Math.log2(pitchFactor);
+    const kind = semitones > 0 ? "raised" : "lowered";
+    return `Detected edit: pitch ${kind} ${Math.abs(semitones).toFixed(1)} semitones`;
+  }
+  return null;
 }
 
 function formatTimestamp(seconds: number | null): string {
