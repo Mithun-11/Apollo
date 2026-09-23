@@ -43,7 +43,7 @@ type RecognitionState =
   | { phase: "ready" }
   | { phase: "starting-microphone" }
   | { phase: "recording"; elapsedSeconds: number }
-  | { phase: "processing" }
+  | { phase: "processing"; recognition: RecognitionResponse | null }
   | { phase: "complete"; response: RecognitionExplanationResponse }
   | { phase: "error"; message: string };
 
@@ -334,6 +334,7 @@ export default function Home() {
       const activeSession = session;
       const sampleRate = microphone.context.sampleRate;
 
+      let confirmedRecognition: RecognitionResponse | null = null;
       const recordedChunks = await new Promise<Float32Array[]>((resolve) => {
         let resolved = false;
         let checkInFlight = false;
@@ -369,7 +370,10 @@ export default function Home() {
           lastCheckSeconds = elapsedSeconds;
           recognizeAudio(encodeWav(chunks.current, sampleRate))
             .then((response) => {
-              if (isConfirmedMatch(previousCheck, response)) activeSession.finish();
+              if (isConfirmedMatch(previousCheck, response)) {
+                confirmedRecognition = response;
+                activeSession.finish();
+              }
               previousCheck = response.matched ? response : null;
             })
             .catch(() => {
@@ -384,7 +388,7 @@ export default function Home() {
 
       capturing.current = false;
       if (unmounted.current) return;
-      setState({ phase: "processing" });
+      setState({ phase: "processing", recognition: confirmedRecognition });
       const recording = encodeWav(recordedChunks, sampleRate);
       replacePlaybackUrl(recording);
       const response = await recognizeAudioWithExplanation(recording);
@@ -410,6 +414,12 @@ export default function Home() {
   }
 
   const result = state.phase === "complete" ? state.response : null;
+  const recognition =
+    state.phase === "complete"
+      ? state.response.recognition
+      : state.phase === "processing"
+        ? state.recognition
+        : null;
   const isBusy =
     state.phase === "starting-microphone" ||
     state.phase === "recording" ||
@@ -422,7 +432,9 @@ export default function Home() {
         : state.phase === "recording"
           ? `Listening… ${state.elapsedSeconds}s (stops automatically once the song is recognized)`
           : state.phase === "processing"
-            ? "Recognizing and explaining…"
+            ? state.recognition
+              ? "Match found · loading the explanation…"
+              : "Recognizing and explaining…"
             : state.phase === "complete"
               ? state.response.recognition.matched
                 ? "Match found"
@@ -462,16 +474,16 @@ export default function Home() {
           </div>
         ) : null}
 
-        {result?.recognition.matched && result.recognition.song ? (
+        {recognition?.matched && recognition.song ? (
           <div className="result" aria-live="polite">
             <p className="result-label">
-              Found at {formatTimestamp(result.recognition.timestampSeconds)}
+              Found at {formatTimestamp(recognition.timestampSeconds)}
             </p>
-            <h2>{result.recognition.song.name}</h2>
-            {describeEdit(result.recognition) ? (
-              <p className="result-label">{describeEdit(result.recognition)}</p>
+            <h2>{recognition.song.name}</h2>
+            {describeEdit(recognition) ? (
+              <p className="result-label">{describeEdit(recognition)}</p>
             ) : null}
-            <a href={result.recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
+            <a href={recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
               Open in Spotify
             </a>
           </div>
