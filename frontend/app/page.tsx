@@ -2,13 +2,32 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  recognizeAudio,
   recognizeAudioWithExplanation,
   type RecognitionExplanationResponse,
+  type RecognitionResponse,
 } from "../lib/api";
 import LiveWaveform from "./live-waveform";
 import RecognitionExplanation from "./recognition-explanation";
 
-const RECORDING_SECONDS = 10;
+// Listening stops as soon as two consecutive checks agree on the song and its position,
+// like Shazam; otherwise it stops at the maximum and recognizes whatever was captured.
+const MAX_RECORDING_SECONDS = 15;
+const FIRST_CHECK_SECONDS = 2;
+const CHECK_INTERVAL_SECONDS = 1;
+const TIMER_TICK_MS = 250;
+// Both checks start at the same moment in the song, so their timestamps must agree.
+const TIMESTAMP_AGREEMENT_SECONDS = 0.25;
+// Browser voice processing (echo cancellation, noise suppression, gain control) is tuned for
+// speech and distorts music, so the recording keeps the raw microphone signal.
+const MICROPHONE_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    channelCount: 1,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  },
+};
 const RECORDER_WORKLET = `
 class ApolloRecorderProcessor extends AudioWorkletProcessor {
   process(inputs) {
@@ -23,7 +42,7 @@ registerProcessor("apollo-recorder", ApolloRecorderProcessor);
 type RecognitionState =
   | { phase: "ready" }
   | { phase: "requesting-permission" }
-  | { phase: "recording"; secondsRemaining: number }
+  | { phase: "recording"; elapsedSeconds: number }
   | { phase: "processing" }
   | { phase: "complete"; response: RecognitionExplanationResponse }
   | { phase: "error"; message: string };
@@ -35,11 +54,21 @@ type RecordingSession = {
   recorder: AudioWorkletNode;
   silentOutput: GainNode;
   finish: () => void;
-  recordingTimerId: number | null;
-  countdownTimerId: number | null;
+  tickTimerId: number | null;
   cleaned: boolean;
-  _countdownTick?: number;
 };
+
+function isConfirmedMatch(
+  previous: RecognitionResponse | null,
+  current: RecognitionResponse,
+): boolean {
+  if (!previous?.matched || !current.matched || !previous.song || !current.song) return false;
+  if (previous.timestampSeconds === null || current.timestampSeconds === null) return false;
+  return (
+    previous.song.id === current.song.id &&
+    Math.abs(previous.timestampSeconds - current.timestampSeconds) <= TIMESTAMP_AGREEMENT_SECONDS
+  );
+}
 
 function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
   const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
@@ -79,8 +108,7 @@ function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
 async function cleanupRecordingSession(session: RecordingSession): Promise<void> {
   if (session.cleaned) return;
   session.cleaned = true;
-  if (session.recordingTimerId !== null) window.clearTimeout(session.recordingTimerId);
-  if (session.countdownTimerId !== null) window.clearInterval(session.countdownTimerId);
+  if (session.tickTimerId !== null) window.clearInterval(session.tickTimerId);
   session.recorder.port.onmessage = null;
   session.recorder.disconnect();
   session.recorder.port.close();
@@ -151,7 +179,7 @@ export default function Home() {
     let context: AudioContext | undefined;
     let session: RecordingSession | null = null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia(MICROPHONE_CONSTRAINTS);
       context = new AudioContext();
       if (!context.audioWorklet) {
         throw new Error("This browser does not support AudioWorklet recording.");
@@ -176,8 +204,7 @@ export default function Home() {
         recorder,
         silentOutput,
         finish: () => undefined,
-        recordingTimerId: null,
-        countdownTimerId: null,
+        tickTimerId: null,
         cleaned: false,
       };
       sessionRef.current = session;
@@ -195,36 +222,57 @@ export default function Home() {
       source.connect(recorder);
       recorder.connect(silentOutput);
       silentOutput.connect(context.destination);
-      setState({ phase: "recording", secondsRemaining: RECORDING_SECONDS });
+      setState({ phase: "recording", elapsedSeconds: 0 });
+      const activeSession = session;
+      const sampleRate = activeSession.context.sampleRate;
 
       const recordedChunks = await new Promise<Float32Array[]>((resolve) => {
         let resolved = false;
-        session!.finish = () => {
+        let checkInFlight = false;
+        let lastCheckSeconds = 0;
+        let previousCheck: RecognitionResponse | null = null;
+        const startedAt = performance.now();
+        activeSession.finish = () => {
           if (resolved) return;
           resolved = true;
           resolve([...chunks.current]);
         };
-        session!.recordingTimerId = window.setTimeout(session!.finish, RECORDING_SECONDS * 1000);
-        session!.countdownTimerId = window.setInterval(() => {
-          const currentSession = sessionRef.current;
-          if (!currentSession) return;
-          setState((current) => {
-            if (current.phase !== "recording") return current;
-            const next = Math.max(0, current.secondsRemaining - 1);
-            return { phase: "recording", secondsRemaining: next };
-          });
-          // Call finish() outside the updater to avoid side effects in a pure function.
-          // Access secondsRemaining from state via a functional approach isn't reliable here,
-          // so we track elapsed ticks independently.
-          currentSession._countdownTick = (currentSession._countdownTick ?? RECORDING_SECONDS) - 1;
-          if (currentSession._countdownTick <= 0) {
-            currentSession.finish();
+        activeSession.tickTimerId = window.setInterval(() => {
+          const elapsedSeconds = (performance.now() - startedAt) / 1000;
+          setState((current) =>
+            current.phase === "recording"
+              ? { phase: "recording", elapsedSeconds: Math.floor(elapsedSeconds) }
+              : current,
+          );
+          if (elapsedSeconds >= MAX_RECORDING_SECONDS) {
+            activeSession.finish();
+            return;
           }
-        }, 1000);
+          if (
+            checkInFlight ||
+            elapsedSeconds < FIRST_CHECK_SECONDS ||
+            elapsedSeconds - lastCheckSeconds < CHECK_INTERVAL_SECONDS
+          ) {
+            return;
+          }
+          checkInFlight = true;
+          lastCheckSeconds = elapsedSeconds;
+          recognizeAudio(encodeWav(chunks.current, sampleRate))
+            .then((response) => {
+              if (isConfirmedMatch(previousCheck, response)) activeSession.finish();
+              previousCheck = response.matched ? response : null;
+            })
+            .catch(() => {
+              // A failed early check only delays the answer; the final request reports errors.
+              previousCheck = null;
+            })
+            .finally(() => {
+              checkInFlight = false;
+            });
+        }, TIMER_TICK_MS);
       });
 
       if (unmounted.current) return;
-      const sampleRate = session.context.sampleRate;
       setState({ phase: "processing" });
       await cleanupRecordingSession(session);
       sessionRef.current = null;
@@ -263,7 +311,7 @@ export default function Home() {
       : state.phase === "requesting-permission"
         ? "Requesting microphone permission…"
         : state.phase === "recording"
-          ? `Recording… ${state.secondsRemaining} seconds remaining`
+          ? `Listening… ${state.elapsedSeconds}s (stops automatically once the song is recognized)`
           : state.phase === "processing"
             ? "Recognizing and explaining…"
             : state.phase === "complete"

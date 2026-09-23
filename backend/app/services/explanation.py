@@ -294,7 +294,7 @@ def _winning_pairs(
             continue
         for catalog_fingerprint in catalog_by_hash.get(query_fingerprint.hash_value, ()):
             source_offset = catalog_fingerprint.anchor_frame - query_fingerprint.anchor_frame
-            if source_offset != winning_offset_frame:
+            if abs(source_offset - winning_offset_frame) > config.offset_tolerance_frames:
                 continue
             pairs.append((trace, catalog_fingerprint))
 

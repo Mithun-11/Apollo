@@ -22,14 +22,18 @@ class SignalConfig:
     hop_length: int = 512
     peak_neighborhood_frequency_bins: int = 15
     peak_neighborhood_time_frames: int = 9
-    peak_amplitude_threshold_db: float = -35.0
+    peak_amplitude_threshold_db: float = -60.0
+    min_frequency_hz: float = 100.0
+    max_frequency_hz: float = 5_000.0
+    peaks_per_second: int = 60
     fan_out: int = 10
     min_time_delta_frames: int = 1
-    max_time_delta_frames: int = 200
-    match_threshold: int = 10
-    min_match_ratio: float = 0.01
-    min_winner_ratio: float = 1.5
-    fingerprint_version: str = "1"
+    max_time_delta_frames: int = 64
+    max_frequency_delta_bins: int = 150
+    match_threshold: int = 20
+    min_winner_ratio: float = 2.0
+    offset_tolerance_frames: int = 1
+    fingerprint_version: str = "3"
 
 
 DEFAULT_CONFIG = SignalConfig()
@@ -97,7 +101,7 @@ def load_audio(path: str | Path, config: SignalConfig = DEFAULT_CONFIG) -> Audio
 def extract_peaks(
     samples: FloatArray, config: SignalConfig = DEFAULT_CONFIG
 ) -> PeakExtraction:
-    """Compute a dB spectrogram and its local spectral maxima."""
+    """Compute a dB spectrogram and its strongest in-band local spectral maxima."""
     if samples.ndim != 1 or samples.size == 0:
         raise ValueError("Audio samples must be a non-empty mono array")
 
@@ -124,15 +128,41 @@ def extract_peaks(
         mode="constant",
         cval=-np.inf,
     )
+    bin_frequencies_hz = np.arange(spectrogram_db.shape[0]) * config.sample_rate / config.n_fft
+    in_band = (bin_frequencies_hz >= config.min_frequency_hz) & (
+        bin_frequencies_hz <= config.max_frequency_hz
+    )
     peak_bins = np.argwhere(
         (spectrogram_db == local_maxima)
         & (spectrogram_db >= config.peak_amplitude_threshold_db)
+        & in_band[:, np.newaxis]
     )
+    peak_bins = _strongest_peaks_per_second(peak_bins, spectrogram_db, config)
     peaks = tuple(
         Peak(int(frequency_bin), int(time_frame), float(spectrogram_db[frequency_bin, time_frame]))
-        for frequency_bin, time_frame in peak_bins[np.argsort(peak_bins[:, 1], stable=True)]
+        for frequency_bin, time_frame in peak_bins
     )
     return PeakExtraction(spectrogram_db=spectrogram_db, peaks=peaks)
+
+
+def _strongest_peaks_per_second(
+    peak_bins: NDArray[np.intp], spectrogram_db: Float64Array, config: SignalConfig
+) -> NDArray[np.intp]:
+    """Keep a fixed peak budget per second so quiet passages and noisy queries stay comparable.
+
+    Returns (frequency_bin, time_frame) rows ordered by time, then frequency.
+    """
+    frequency_bins = peak_bins[:, 0]
+    time_frames = peak_bins[:, 1]
+    if config.peaks_per_second > 0 and peak_bins.size:
+        frames_per_second = max(1, round(config.sample_rate / config.hop_length))
+        seconds = time_frames // frames_per_second
+        amplitudes = spectrogram_db[frequency_bins, time_frames]
+        order = np.lexsort((frequency_bins, time_frames, -amplitudes, seconds))
+        sorted_seconds = seconds[order]
+        rank = np.arange(order.size) - np.searchsorted(sorted_seconds, sorted_seconds, side="left")
+        peak_bins = peak_bins[order[rank < config.peaks_per_second]]
+    return peak_bins[np.lexsort((peak_bins[:, 0], peak_bins[:, 1]))]
 
 
 def create_fingerprints(
@@ -159,6 +189,8 @@ def create_fingerprints_with_traces(
                 continue
             if delta > config.max_time_delta_frames:
                 break
+            if abs(target.frequency_bin - anchor.frequency_bin) > config.max_frequency_delta_bins:
+                continue
 
             payload = (
                 f"{config.fingerprint_version}|{anchor.frequency_bin}|"
@@ -190,7 +222,13 @@ def match_fingerprints(
     catalog: Mapping[str, Sequence[Fingerprint]],
     config: SignalConfig = DEFAULT_CONFIG,
 ) -> MatchResult | None:
-    """Match query hashes by voting for a catalog song and aligned frame offset."""
+    """Match query hashes by voting for a catalog song and aligned frame offset.
+
+    Votes within ``offset_tolerance_frames`` of an offset count together because a recording
+    rarely starts on the catalog's STFT frame grid. Negative offsets are impossible for a clip
+    taken from inside a song and are ignored. A winner needs ``match_threshold`` votes and
+    ``min_winner_ratio`` times the votes of the strongest competing song.
+    """
     if not query:
         return None
     if any(fingerprint.version != config.fingerprint_version for fingerprint in query):
@@ -205,25 +243,29 @@ def match_fingerprints(
     votes: Counter[tuple[str, int]] = Counter()
     for fingerprint in query:
         for song_id, catalog_frame in index.get(fingerprint.hash_value, ()):
-            votes[(song_id, catalog_frame - fingerprint.anchor_frame)] += 1
+            offset = catalog_frame - fingerprint.anchor_frame
+            if offset >= 0:
+                votes[(song_id, offset)] += 1
 
     if not votes:
         return None
+    tolerance = config.offset_tolerance_frames
+    clustered_votes: Counter[tuple[str, int]] = Counter()
+    for (candidate, offset), count in votes.items():
+        for nearby_offset in range(max(0, offset - tolerance), offset + tolerance + 1):
+            clustered_votes[(candidate, nearby_offset)] += count
+
     (song_id, offset_frame), match_count = min(
-        votes.items(),
-        key=lambda item: (-item[1], item[0][0], abs(item[0][1]), item[0][1]),
+        clustered_votes.items(),
+        key=lambda item: (-item[1], -votes[item[0]], item[0][0], item[0][1]),
     )
     if match_count < config.match_threshold:
-        return None
-
-    match_ratio = match_count / len(query)
-    if match_ratio < config.min_match_ratio:
         return None
 
     runner_up_match_count = max(
         (
             count
-            for (candidate, _), count in votes.items()
+            for (candidate, _), count in clustered_votes.items()
             if candidate != song_id
         ),
         default=0,
