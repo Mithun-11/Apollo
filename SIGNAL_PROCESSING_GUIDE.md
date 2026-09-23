@@ -15,8 +15,9 @@ produces a deterministic 64-bit value represented as 16 lowercase hexadecimal ch
 code keeps that representation; the SQLite adapter maps it losslessly to a signed 64-bit integer.
 
 Recognition queries SQLite only for hashes present in the microphone clip. The existing matcher
-then votes on `(song_id, catalog_anchor_frame - query_anchor_frame)` and accepts a winner only when
-it clears the absolute vote, normalized support, and runner-up separation gates. The source
+then votes on `(song_id, catalog_anchor_frame - query_anchor_frame)`, counting adjacent frames
+together and ignoring negative offsets, and accepts a winner only when it clears the absolute vote
+and runner-up separation gates. `PROGRESS.md` explains the v3 parameters and their measurements. The source
 timestamp is the winning frame offset multiplied by `hop_length / sample_rate`.
 
 Do not tune the algorithm from intuition. Generate the catalog, measure clean/short/noisy clips,

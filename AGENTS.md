@@ -4,6 +4,8 @@
 
 1. Inspect the relevant code, tests, and one comparable pattern before editing.
 2. Treat `PROJECT_PLAN.md` and `CONSTRAINTS.md` as the current scope and quality floor.
+   Read `PROGRESS.md` before touching recognition, matching, or the microphone flow; it records
+   the current algorithm, its measurements, rejected ideas, and open items. Keep it updated.
 3. State assumptions that affect behavior, API shape, signal parameters, schema, or scope.
 4. Make the smallest complete change and run the relevant checks.
 5. Report changes, verification, and limitations. Do not commit or push unless asked.

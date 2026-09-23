@@ -19,7 +19,7 @@ migrated; each developer generates or receives the same separately distributed d
 ## Completed baseline
 
 - Deterministic versioned constellation fingerprints.
-- Absolute, normalized-support, and runner-up match gates.
+- v3 fingerprints and match gates (absolute votes and runner-up separation); see `PROGRESS.md`.
 - SQLite schema with integer song IDs, cascade deletion, duplicate protection, and an index on
   `(fingerprint_version, hash_value)`.
 - Lossless mapping between 16-digit hexadecimal hashes and signed 64-bit SQLite integers.
@@ -30,7 +30,7 @@ migrated; each developer generates or receives the same separately distributed d
 
 ## Next work
 
-1. Generate the new SQLite catalog from the legal local song set.
+1. Test recognition with real phone → laptop recordings (see open items in `PROGRESS.md`).
 2. Distribute one identical `data/apollo-v3.db` snapshot to both developers outside Git.
 3. Measure fingerprint generation, database lookup, scoring, and total recognition time on that
    catalog before considering further optimization.
