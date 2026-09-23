@@ -76,6 +76,10 @@ floor must be re-measured when:
   matching algorithm. The explanation response includes bounded pair examples, top candidate
   vote totals, and the exact acceptance/rejection reason. Reduced-motion users can step through
   the same evidence without animation. Recognition checks still use `/recognize` as before.
+- **Optional replay audio:** the seven-stage explanation defaults to silent playback. A sound
+  toggle uses the local recording blob and synchronizes the recorded audio with the visual
+  cursor. Each stage covers one pass through the clip; pause, seeking, stage changes, and sound-off
+  stop the replay audio. This is presentation playback only and does not affect recognition.
 
 ## Catalog workflow
 

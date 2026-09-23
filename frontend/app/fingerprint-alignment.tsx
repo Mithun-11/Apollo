@@ -26,10 +26,12 @@ export default function FingerprintAlignment({
   matches,
   queryDurationSeconds,
   sourceInterval,
+  cursorSeconds,
 }: {
   matches: MatchedFingerprintDisplay[];
   queryDurationSeconds: number;
   sourceInterval: { startSeconds: number; endSeconds: number } | null;
+  cursorSeconds?: number;
 }) {
   const visible = matches.slice(0, MAX_RENDERED_MATCHES);
   const queryDuration = queryDurationSeconds || 1;
@@ -75,6 +77,7 @@ export default function FingerprintAlignment({
         <text x={LEFT + PW} y={QUERY_Y + 34} fill="#6b7280" fontSize="11" textAnchor="end">
           {fmt(queryDurationSeconds)}
         </text>
+        {cursorSeconds !== undefined && <line x1={LEFT + clamp(cursorSeconds / queryDuration) * PW} x2={LEFT + clamp(cursorSeconds / queryDuration) * PW} y1={QUERY_Y - 31} y2={QUERY_Y + 20} stroke="#087f8b" strokeWidth="2.5" />}
 
         {/* ── Song timeline band ──────────────────────────────── */}
         <rect x={LEFT} y={SONG_Y - 14} width={PW} height={28}
@@ -85,6 +88,7 @@ export default function FingerprintAlignment({
         <text x={LEFT + PW} y={SONG_Y + 34} fill="#6b7280" fontSize="11" textAnchor="end">
           {fmt(sourceEnd)}
         </text>
+        {cursorSeconds !== undefined && <line x1={LEFT + clamp(cursorSeconds / queryDuration) * PW} x2={LEFT + clamp(cursorSeconds / queryDuration) * PW} y1={SONG_Y - 31} y2={SONG_Y + 20} stroke="#d97706" strokeWidth="2.5" />}
 
         {/* ── Grid lines / ticks on both timelines ────────────── */}
         {Array.from({ length: tickCount - 1 }, (_, i) => {

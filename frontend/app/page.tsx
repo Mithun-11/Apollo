@@ -485,7 +485,7 @@ export default function Home() {
           </div>
         ) : null}
 
-        {result ? <RecognitionExplanation response={result} /> : null}
+        {result && playbackUrl ? <RecognitionExplanation response={result} recordingUrl={playbackUrl} /> : null}
       </section>
     </main>
   );

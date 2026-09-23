@@ -640,6 +640,8 @@ body { background: radial-gradient(circle at 50% -18%, #11313b 0, #0a1419 35%, #
 .story-visual-head span:last-child { color: #638791; }
 .story-visual .chart-figure, .story-visual > div:not(.story-visual-head) { margin: 0; }
 .story-visual .chart-caption { color: #b2c4c8; margin: 13px 3px 4px; }
+.story-clip-track { height: 4px; margin: 18px 3px 3px !important; border-radius: 99px; overflow: hidden; background: #34525a; }
+.story-clip-track span { display: block; height: 100%; background: #efc27d; }
 .story-visual .chart-fallback { color: #b2c4c8; }
 .story-visual .waveform-plot, .story-visual .pair-plot { width: 100%; height: auto; display: block; border-radius: 10px; }
 .fingerprint-formula { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 14px; color: #c5d9dc; font-size: .72rem; }
@@ -676,6 +678,10 @@ body { background: radial-gradient(circle at 50% -18%, #11313b 0, #0a1419 35%, #
 .story-controls button { padding: 11px 17px; font-size: .82rem; }
 .story-control-secondary { background: #183039; color: #d6e9e9; border: 1px solid #38565d; }
 .story-play { background: #a9e0df; color: #102a30; }
+.story-sound { background: #183039; color: #d6e9e9; border: 1px solid #38565d; }
+.story-sound--on { background: #e9bb79; color: #30210e; border-color: #e9bb79; }
+.story-sound-help { color: #a9c1c5; font-size: .75rem; line-height: 1.5; margin-top: 12px; }
+.story-audio-error { color: #f4b4a9; font-size: .78rem; margin-top: 10px; }
 .story-controls button:disabled { cursor: default; opacity: .35; }
 .story-speed { margin-left: auto; color: #a9c1c5; font-size: .78rem; display: flex; align-items: center; gap: 9px; }
 .story-speed select { background: #173039; color: #e6f0f0; border: 1px solid #38565d; border-radius: 8px; padding: 7px 10px; font: inherit; }

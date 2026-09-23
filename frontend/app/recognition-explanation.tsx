@@ -1,15 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PairExample, RecognitionExplanationResponse, WaveformEnvelopePoint } from "../lib/api";
 import ConstellationPlot from "./constellation-plot";
 import FingerprintAlignment from "./fingerprint-alignment";
 import SpectrogramCanvas from "./spectrogram-canvas";
 import VoteHistogram from "./vote-histogram";
 
-const STEP_SECONDS = 2;
 const STEPS = ["Capture", "Spectrum", "Peaks", "Fingerprints", "Catalog", "Alignment", "Decision"] as const;
-const TOTAL_SECONDS = STEPS.length * STEP_SECONDS;
 const seconds = (value: number) => `${value.toFixed(2)} s`;
 
 function decisionText(reason: string): string {
@@ -74,21 +72,34 @@ function PairPlot({ pairs, duration, maximumFrequency, cursor }: { pairs: PairEx
   );
 }
 
-export default function RecognitionExplanation({ response }: { response: RecognitionExplanationResponse }) {
+export default function RecognitionExplanation({ response, recordingUrl }: { response: RecognitionExplanationResponse; recordingUrl: string }) {
   const { recognition, explanation } = response;
   const [progress, setProgress] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundError, setSoundError] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
   const [showTechnical, setShowTechnical] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
-  const step = Math.min(STEPS.length - 1, Math.floor(progress / STEP_SECONDS));
-  const actuallyPlaying = playing && progress < TOTAL_SECONDS - 0.001;
-  const cursor = progress % STEP_SECONDS / STEP_SECONDS * explanation.queryDurationSeconds;
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const progressRef = useRef(0);
+  const lastAudioTimeRef = useRef(0);
+  const stepDuration = Math.max(explanation.queryDurationSeconds, 0.1);
+  const totalDuration = STEPS.length * stepDuration;
+  const step = Math.min(STEPS.length - 1, Math.floor(progress / stepDuration));
+  const actuallyPlaying = playing && progress < totalDuration - 0.001;
+  const cursor = Math.min(explanation.queryDurationSeconds, progress % stepDuration);
   const config = explanation.signalConfig;
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setReducedMotion(media.matches);
+    const update = () => {
+      setReducedMotion(media.matches);
+      if (media.matches) {
+        audioRef.current?.pause();
+        setPlaying(false);
+      }
+    };
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
@@ -99,20 +110,98 @@ export default function RecognitionExplanation({ response }: { response: Recogni
     let frame = 0;
     let last = 0;
     const tick = (now: number) => {
-      if (last) {
-        const elapsed = Math.min((now - last) / 1000, 0.1);
-        setProgress((current) => Math.min(TOTAL_SECONDS - 0.001, current + elapsed * speed));
+      const audio = audioRef.current;
+      let next = progressRef.current;
+      if (soundEnabled && audio && !audio.paused) {
+        let currentStep = Math.floor(next / stepDuration);
+        const audioTime = audio.currentTime;
+        if (audioTime + 0.25 < lastAudioTimeRef.current) currentStep += 1;
+        lastAudioTimeRef.current = audioTime;
+        next = Math.min(totalDuration - 0.001, currentStep * stepDuration + Math.min(audioTime, stepDuration - 0.001));
+      } else if (!soundEnabled && last) {
+        next = Math.min(totalDuration - 0.001, next + Math.min((now - last) / 1000, 0.1) * speed);
+      }
+      if (next !== progressRef.current) {
+        progressRef.current = next;
+        setProgress(next);
+      }
+      if (next >= totalDuration - 0.001) {
+        audio?.pause();
+        setPlaying(false);
+        return;
       }
       last = now;
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [actuallyPlaying, reducedMotion, speed]);
+  }, [actuallyPlaying, reducedMotion, soundEnabled, speed, stepDuration, totalDuration]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    const pauseWhenHidden = () => {
+      if (document.visibilityState === "hidden") {
+        audio?.pause();
+        setPlaying(false);
+      }
+    };
+    document.addEventListener("visibilitychange", pauseWhenHidden);
+    return () => {
+      document.removeEventListener("visibilitychange", pauseWhenHidden);
+      audio?.pause();
+    };
+  }, []);
+
+  const setReplayPosition = (value: number) => {
+    const next = Math.max(0, Math.min(totalDuration - 0.001, value));
+    progressRef.current = next;
+    setProgress(next);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.currentTime = Math.min(next % stepDuration, Math.max(0, audio.duration - 0.001) || stepDuration);
+      lastAudioTimeRef.current = audio.currentTime;
+    }
+  };
+
+  const tryPlayAudio = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.playbackRate = speed;
+    audio.currentTime = Math.min(progressRef.current % stepDuration, Math.max(0, audio.duration - 0.001) || stepDuration);
+    lastAudioTimeRef.current = audio.currentTime;
+    void audio.play().catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setSoundEnabled(false);
+      setSoundError("The recording could not play. The visual replay will continue silently.");
+    });
+  };
+
+  const toggleSound = () => {
+    if (soundEnabled) {
+      audioRef.current?.pause();
+      setSoundEnabled(false);
+      return;
+    }
+    setSoundError(null);
+    setSoundEnabled(true);
+    if (actuallyPlaying) tryPlayAudio();
+  };
+
+  const toggleReplay = () => {
+    if (actuallyPlaying) {
+      audioRef.current?.pause();
+      setPlaying(false);
+      return;
+    }
+    if (progress >= totalDuration - 0.01) setReplayPosition(0);
+    if (soundEnabled) tryPlayAudio();
+    setPlaying(true);
+  };
 
   const goTo = (index: number) => {
+    audioRef.current?.pause();
     setPlaying(false);
-    setProgress(Math.max(0, Math.min(STEPS.length - 1, index)) * STEP_SECONDS);
+    setReplayPosition(Math.max(0, Math.min(STEPS.length - 1, index)) * stepDuration);
   };
   const descriptions = [
     { summary: "Apollo records a short nearby sound and converts it to a normalized mono signal for analysis.", measure: `${seconds(explanation.queryDurationSeconds)} recorded · ${explanation.sampleRate.toLocaleString()} samples/second`, technical: "The waveform is an envelope of normalized audio samples. Its horizontal axis is time; its vertical axis is amplitude." },
@@ -127,6 +216,7 @@ export default function RecognitionExplanation({ response }: { response: Recogni
 
   return (
     <section className="story" aria-labelledby="story-title">
+      <audio ref={audioRef} src={recordingUrl} preload="auto" loop />
       <div className="story-heading">
         <div><p className="eyebrow">THE SIGNAL STORY · REPLAY OF THIS RECORDING</p><h2 id="story-title">See how Apollo reached its answer.</h2><p>Explore each step or play the guided sequence. Every visual uses evidence from your recording.</p></div>
         <div className={`story-verdict ${recognition.matched ? "story-verdict--match" : ""}`}><span>{recognition.matched ? "MATCH FOUND" : "NO MATCH"}</span><strong>{recognition.song?.name ?? "Evidence was insufficient"}</strong>{recognition.timestampSeconds !== null && <small>Starting at {seconds(recognition.timestampSeconds)} in the song</small>}</div>
@@ -134,23 +224,32 @@ export default function RecognitionExplanation({ response }: { response: Recogni
       <nav className="story-steps" aria-label="Recognition stages">{STEPS.map((title, index) => <button key={title} type="button" className={`story-step ${step === index ? "story-step--active" : ""}`} onClick={() => goTo(index)} aria-current={step === index ? "step" : undefined}><span>{String(index + 1).padStart(2, "0")}</span>{title}</button>)}</nav>
       <div className="story-body">
         <div className="story-visual">
-          <div className="story-visual-head"><span>{String(step + 1).padStart(2, "0")} / {STEPS[step]}</span><span>ACTUAL RECORDING DATA</span></div>
+          <div className="story-visual-head"><span>{String(step + 1).padStart(2, "0")} / {STEPS[step]}</span><span>RECORDING {seconds(cursor)} / {seconds(explanation.queryDurationSeconds)}</span></div>
           {step === 0 && <WaveformEnvelope points={explanation.waveformEnvelope} duration={explanation.queryDurationSeconds} cursor={cursor} />}
           {step === 1 && <SpectrogramCanvas spectrogram={explanation.spectrogram} cursorSeconds={cursor} frequencyBand={{ minimum: config.minimumFrequencyHz, maximum: config.maximumFrequencyHz }} />}
           {step === 2 && <ConstellationPlot peaks={explanation.peaks} durationSeconds={explanation.queryDurationSeconds} maximumFrequencyHz={explanation.spectrogram.maximumFrequencyHz} cursorSeconds={cursor} />}
           {step === 3 && <PairPlot pairs={explanation.pairExamples} duration={explanation.queryDurationSeconds} maximumFrequency={config.maximumFrequencyHz} cursor={cursor} />}
           {step === 4 && <div className="lookup-visual"><div className="lookup-node"><span>QUERY</span><strong>{explanation.counts.fingerprints.toLocaleString()}</strong><small>fingerprints made</small></div><div className="lookup-path" aria-hidden="true"><span>version {config.fingerprintVersion} + hash</span><i /></div><div className="lookup-node lookup-node--catalog"><span>CATALOG INDEX</span><strong>{explanation.counts.matchingHashes.toLocaleString()}</strong><small>distinct hashes found</small></div><p>Matching hashes are candidate evidence. The next step checks whether their times agree.</p></div>}
-          {step === 5 && <FingerprintAlignment matches={explanation.matchedFingerprints} queryDurationSeconds={explanation.queryDurationSeconds} sourceInterval={explanation.sourceInterval} />}
+          {step === 5 && <FingerprintAlignment matches={explanation.matchedFingerprints} queryDurationSeconds={explanation.queryDurationSeconds} sourceInterval={explanation.sourceInterval} cursorSeconds={cursor} />}
           {step === 6 && <VoteHistogram votes={explanation.decision.clusteredOffsetVotes} threshold={explanation.decision.minimumVotes} timestampSeconds={explanation.decision.leadingOffsetSeconds} accepted={recognition.matched} />}
+          <div className="story-clip-track" aria-hidden="true"><span style={{ width: `${Math.min(100, cursor / stepDuration * 100)}%` }} /></div>
         </div>
         <aside className="story-detail"><p className="story-detail-index">STEP {String(step + 1).padStart(2, "0")} / 07</p><h3>{STEPS[step]}</h3><p className="story-summary">{detail.summary}</p><div className="story-measure"><span>FROM THIS RECORDING</span><strong>{detail.measure}</strong></div>
           {step === 6 && explanation.candidateVotes.length > 0 && <div className="candidate-list" aria-label="Leading catalog candidates">{explanation.candidateVotes.map((candidate) => <div key={candidate.songName}><span>{candidate.songName}</span><strong>{candidate.votes} votes</strong></div>)}</div>}
           <button className="technical-toggle" type="button" onClick={() => setShowTechnical((current) => !current)} aria-expanded={showTechnical}>{showTechnical ? "Hide technical detail −" : "Show technical detail +"}</button>{showTechnical && <p className="technical-copy">{detail.technical}</p>}
         </aside>
       </div>
-      <div className="story-controls"><button type="button" className="story-control-secondary" onClick={() => goTo(step - 1)} disabled={step === 0}>← Previous</button><button type="button" className="story-play" onClick={() => { if (progress >= TOTAL_SECONDS - .01) { setProgress(0); setPlaying(true); } else setPlaying((current) => !current); }} disabled={reducedMotion}>{actuallyPlaying ? "Pause replay" : "▶ Play explanation"}</button><button type="button" className="story-control-secondary" onClick={() => goTo(step + 1)} disabled={step === STEPS.length - 1}>Next →</button><label className="story-speed">Speed <select value={speed} onChange={(event) => setSpeed(Number(event.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label></div>
-      <label className="story-scrub">Replay position <input type="range" min="0" max={TOTAL_SECONDS - .001} step="0.01" value={progress} onChange={(event) => { setPlaying(false); setProgress(Number(event.target.value)); }} /></label>
-      {step <= 3 && <label className="story-scrub story-scrub--cursor">Inspect recording time <input type="range" min="0" max="1.99" step="0.01" value={progress % STEP_SECONDS} onChange={(event) => { setPlaying(false); setProgress(step * STEP_SECONDS + Number(event.target.value)); }} /><output>{seconds(cursor)}</output></label>}
+      <div className="story-controls">
+        <button type="button" className="story-control-secondary" onClick={() => goTo(step - 1)} disabled={step === 0}>← Previous</button>
+        <button type="button" className="story-play" onClick={toggleReplay} disabled={reducedMotion}>{actuallyPlaying ? "Pause replay" : "▶ Play explanation"}</button>
+        <button type="button" className="story-control-secondary" onClick={() => goTo(step + 1)} disabled={step === STEPS.length - 1}>Next →</button>
+        <button type="button" className={`story-sound ${soundEnabled ? "story-sound--on" : ""}`} onClick={toggleSound} aria-pressed={soundEnabled} aria-label={`Recording sound ${soundEnabled ? "on" : "off"}. Click to turn ${soundEnabled ? "off" : "on"}.`}>{soundEnabled ? "♪ Sound on" : "♪ Sound off"}</button>
+        <label className="story-speed">Speed <select value={speed} onChange={(event) => { const next = Number(event.target.value); setSpeed(next); if (audioRef.current) audioRef.current.playbackRate = next; }}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label>
+      </div>
+      <p className="story-sound-help">Sound is off by default. Turn it on to hear the same moment shown by the graph cursor. Each stage plays the recording once.</p>
+      {soundError && <p className="story-audio-error" role="alert">{soundError}</p>}
+      <label className="story-scrub">Replay position <input type="range" min="0" max={totalDuration - .001} step="0.01" value={progress} onChange={(event) => { audioRef.current?.pause(); setPlaying(false); setReplayPosition(Number(event.target.value)); }} /></label>
+      {step <= 3 && <label className="story-scrub story-scrub--cursor">Inspect recording time <input type="range" min="0" max={stepDuration - .001} step="0.01" value={progress % stepDuration} onChange={(event) => { audioRef.current?.pause(); setPlaying(false); setReplayPosition(step * stepDuration + Number(event.target.value)); }} /><output>{seconds(cursor)}</output></label>}
       {reducedMotion && <p className="story-motion-note">Animation is paused because your device requests reduced motion. Every stage remains available with the step controls.</p>}
     </section>
   );
