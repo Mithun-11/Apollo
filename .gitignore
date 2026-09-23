@@ -34,6 +34,8 @@ demo-data/*
 demo-clip/*
 !demo-clip/README.md
 artifacts/
+data/*.db
+data/*.db-*
 *.wav
 *.mp3
 *.flac

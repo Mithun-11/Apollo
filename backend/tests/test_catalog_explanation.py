@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 
 from app import catalog
+from app.database import connect_database, fingerprint_hex_to_db_int, initialize_database
 from app.services.signal import (
     Fingerprint,
     Peak,
@@ -15,49 +19,31 @@ from app.services.signal import (
 )
 
 
-class FakeResponse:
-    def __init__(self, data: list[dict[str, Any]]) -> None:
-        self.data = data
-
-
-class FakeQuery:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
-        self.rows = rows
-
-    def select(self, _fields: str) -> FakeQuery:
-        return self
-
-    def eq(self, field: str, value: object) -> FakeQuery:
-        self.rows = [row for row in self.rows if row.get(field) == value]
-        return self
-
-    def in_(self, field: str, values: list[str]) -> FakeQuery:
-        self.rows = [row for row in self.rows if row.get(field) in values]
-        return self
-
-    def limit(self, count: int) -> FakeQuery:
-        self.rows = self.rows[:count]
-        return self
-
-    def execute(self) -> FakeResponse:
-        return FakeResponse(self.rows)
-
-
-class FakeClient:
-    def __init__(self, fingerprint_rows: list[dict[str, Any]]) -> None:
-        self.tables = {
-            "acoustic_fingerprints": fingerprint_rows,
-            "songs": [
-                {
-                    "id": "source-song",
-                    "name": "Source Song",
-                    "spotify_url": "https://open.spotify.com/track/example",
-                }
-            ],
-        }
-
-    def table(self, name: str) -> FakeQuery:
-        return FakeQuery(list(self.tables[name]))
+def _database(tmp_path: Path, rows: list[dict[str, Any]]) -> sqlite3.Connection:
+    database_path = initialize_database(tmp_path / "apollo.db")
+    connection = connect_database(database_path)
+    connection.execute(
+        "INSERT INTO songs (id, name, spotify_url) VALUES (?, ?, ?)",
+        (1, "Source Song", "https://open.spotify.com/track/example"),
+    )
+    connection.executemany(
+        """
+        INSERT INTO acoustic_fingerprints
+            (song_id, fingerprint_version, hash_value, anchor_frame)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            (
+                1,
+                row["fingerprint_version"],
+                fingerprint_hex_to_db_int(row["hash_value"]),
+                row["anchor_frame"],
+            )
+            for row in rows
+        ),
+    )
+    connection.commit()
+    return connection
 
 
 def _analysis_and_catalog(
@@ -82,7 +68,7 @@ def _analysis_and_catalog(
     )
     rows = [
         {
-            "song_id": "source-song",
+            "song_id": 1,
             "fingerprint_version": fingerprint.version,
             "hash_value": fingerprint.hash_value,
             "anchor_frame": fingerprint.anchor_frame + source_offset,
@@ -94,6 +80,7 @@ def _analysis_and_catalog(
 
 def test_recognize_file_with_explanation_reuses_matching_evidence(
     monkeypatch: Any,
+    tmp_path: Path,
 ) -> None:
     config = SignalConfig(
         sample_rate=8_000,
@@ -106,16 +93,17 @@ def test_recognize_file_with_explanation_reuses_matching_evidence(
     analysis, rows, hashes = _analysis_and_catalog(config)
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
-    response = catalog.recognize_file_with_explanation(
-        catalog.Path("query.wav"), FakeClient(rows), config
-    )
+    with closing(_database(tmp_path, rows)) as connection:
+        response = catalog.recognize_file_with_explanation(
+            catalog.Path("query.wav"), connection, config
+        )
 
     recognition = response["recognition"]
     explanation = response["explanation"]
     assert isinstance(recognition, dict)
     assert recognition["matched"] is True
     assert recognition["song"] == {
-        "id": "source-song",
+        "id": "1",
         "name": "Source Song",
         "spotifyUrl": "https://open.spotify.com/track/example",
     }
@@ -143,6 +131,7 @@ def test_recognize_file_with_explanation_reuses_matching_evidence(
 
 def test_no_query_fingerprints_returns_structurally_valid_explanation(
     monkeypatch: Any,
+    tmp_path: Path,
 ) -> None:
     config = SignalConfig(sample_rate=8_000, n_fft=8, hop_length=100)
     analysis = catalog.QueryAnalysis(
@@ -155,9 +144,10 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
     )
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
-    response = catalog.recognize_file_with_explanation(
-        catalog.Path("query.wav"), FakeClient([]), config
-    )
+    with closing(_database(tmp_path, [])) as connection:
+        response = catalog.recognize_file_with_explanation(
+            catalog.Path("query.wav"), connection, config
+        )
 
     assert response["recognition"] == {
         "matched": False,
@@ -176,6 +166,7 @@ def test_no_query_fingerprints_returns_structurally_valid_explanation(
 
 def test_hashes_without_an_accepted_offset_explain_the_no_match(
     monkeypatch: Any,
+    tmp_path: Path,
 ) -> None:
     config = SignalConfig(
         sample_rate=8_000,
@@ -183,7 +174,9 @@ def test_hashes_without_an_accepted_offset_explain_the_no_match(
         hop_length=100,
         match_threshold=2,
     )
-    fingerprint = Fingerprint("known-hash", anchor_frame=4, version=config.fingerprint_version)
+    fingerprint = Fingerprint(
+        "0000000000000001", anchor_frame=4, version=config.fingerprint_version
+    )
     analysis = catalog.QueryAnalysis(
         samples=np.ones(80, dtype=np.float32),
         sample_rate=config.sample_rate,
@@ -194,7 +187,7 @@ def test_hashes_without_an_accepted_offset_explain_the_no_match(
     )
     rows = [
         {
-            "song_id": "source-song",
+            "song_id": 1,
             "fingerprint_version": config.fingerprint_version,
             "hash_value": fingerprint.hash_value,
             "anchor_frame": 100,
@@ -202,9 +195,10 @@ def test_hashes_without_an_accepted_offset_explain_the_no_match(
     ]
     monkeypatch.setattr(catalog, "analyze_query_file", lambda _path, _config: analysis)
 
-    response = catalog.recognize_file_with_explanation(
-        catalog.Path("query.wav"), FakeClient(rows), config
-    )
+    with closing(_database(tmp_path, rows)) as connection:
+        response = catalog.recognize_file_with_explanation(
+            catalog.Path("query.wav"), connection, config
+        )
 
     explanation = response["explanation"]
     assert response["recognition"]["matched"] is False

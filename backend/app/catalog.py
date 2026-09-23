@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
 from urllib.parse import urlparse
-from uuid import uuid4
 
-from supabase import Client
-
+from .database import (
+    connect_database,
+    db_int_to_fingerprint_hex,
+    fingerprint_hex_to_db_int,
+)
 from .services.explanation import (
     build_offset_vote_display,
     build_peak_display,
@@ -95,27 +98,32 @@ def analyze_query_file(path: Path, config: SignalConfig = DEFAULT_CONFIG) -> Que
 
 
 def fetch_matching_catalog(
-    query: Sequence[Fingerprint], client: Client, config: SignalConfig = DEFAULT_CONFIG
+    query: Sequence[Fingerprint],
+    connection: sqlite3.Connection,
+    config: SignalConfig = DEFAULT_CONFIG,
 ) -> dict[str, list[Fingerprint]]:
     """Fetch only catalog fingerprints whose hashes occur in the query."""
     if not query:
         return {}
 
-    hashes = sorted({fingerprint.hash_value for fingerprint in query})
+    hashes = sorted({fingerprint_hex_to_db_int(fingerprint.hash_value) for fingerprint in query})
     catalog: dict[str, list[Fingerprint]] = {}
     for start in range(0, len(hashes), FINGERPRINT_BATCH_SIZE):
-        response = (
-            client.table("acoustic_fingerprints")
-            .select("song_id,fingerprint_version,hash_value,anchor_frame")
-            .eq("fingerprint_version", config.fingerprint_version)
-            .in_("hash_value", hashes[start : start + FINGERPRINT_BATCH_SIZE])
-            .execute()
+        batch = hashes[start : start + FINGERPRINT_BATCH_SIZE]
+        placeholders = ",".join("?" for _ in batch)
+        rows = connection.execute(
+            f"""
+            SELECT song_id, fingerprint_version, hash_value, anchor_frame
+            FROM acoustic_fingerprints
+            WHERE fingerprint_version = ? AND hash_value IN ({placeholders})
+            """,
+            (config.fingerprint_version, *batch),
         )
-        for row in _rows(response.data):
+        for row in rows:
             song_id = str(row["song_id"])
             catalog.setdefault(song_id, []).append(
                 Fingerprint(
-                    str(row["hash_value"]),
+                    db_int_to_fingerprint_hex(row["hash_value"]),
                     int(row["anchor_frame"]),
                     str(row["fingerprint_version"]),
                 )
@@ -124,30 +132,24 @@ def fetch_matching_catalog(
 
 
 def build_fingerprint_rows(
-    song_id: str, fingerprints: Sequence[Fingerprint]
-) -> list[dict[str, Any]]:
+    song_id: int, fingerprints: Sequence[Fingerprint]
+) -> list[tuple[int, str, int, int]]:
     return [
-        {
-            "song_id": song_id,
-            "fingerprint_version": fingerprint.version,
-            "hash_value": fingerprint.hash_value,
-            "anchor_frame": fingerprint.anchor_frame,
-        }
+        (
+            song_id,
+            fingerprint.version,
+            fingerprint_hex_to_db_int(fingerprint.hash_value),
+            fingerprint.anchor_frame,
+        )
         for fingerprint in fingerprints
     ]
-
-
-def _rows(value: object) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    return [cast(dict[str, Any], row) for row in value if isinstance(row, dict)]
 
 
 def ingest_song(
     path: Path,
     name: str,
     spotify_url: str,
-    client: Client,
+    connection: sqlite3.Connection,
     config: SignalConfig = DEFAULT_CONFIG,
 ) -> dict[str, object]:
     song_name = name.strip()
@@ -158,19 +160,25 @@ def ingest_song(
     if not fingerprints:
         raise ValueError("no fingerprints were generated from the audio")
 
-    song_id = str(uuid4())
-    client.table("songs").insert({"id": song_id, "name": song_name, "spotify_url": link}).execute()
-    try:
+    with connection:
+        cursor = connection.execute(
+            "INSERT INTO songs (name, spotify_url) VALUES (?, ?)",
+            (song_name, link),
+        )
+        song_id = cursor.lastrowid
+        if song_id is None:
+            raise RuntimeError("SQLite did not return the inserted song ID")
         rows = build_fingerprint_rows(song_id, fingerprints)
-        for start in range(0, len(rows), FINGERPRINT_BATCH_SIZE):
-            client.table("acoustic_fingerprints").insert(
-                rows[start : start + FINGERPRINT_BATCH_SIZE]
-            ).execute()
-    except Exception:
-        client.table("songs").delete().eq("id", song_id).execute()
-        raise
+        connection.executemany(
+            """
+            INSERT INTO acoustic_fingerprints
+                (song_id, fingerprint_version, hash_value, anchor_frame)
+            VALUES (?, ?, ?, ?)
+            """,
+            rows,
+        )
     return {
-        "id": song_id,
+        "id": str(song_id),
         "name": song_name,
         "spotifyUrl": link,
         "fingerprintCount": len(fingerprints),
@@ -178,24 +186,24 @@ def ingest_song(
 
 
 def recognize_file(
-    path: Path, client: Client, config: SignalConfig = DEFAULT_CONFIG
+    path: Path, connection: sqlite3.Connection, config: SignalConfig = DEFAULT_CONFIG
 ) -> dict[str, object]:
     query = fingerprint_file(path, config)
     if not query:
         return _no_match()
-    catalog = fetch_matching_catalog(query, client, config)
+    catalog = fetch_matching_catalog(query, connection, config)
     result = match_fingerprints(query, catalog, config)
     if result is None:
         return _no_match()
-    return _recognition_response(result, len(query), _fetch_song(result.song_id, client))
+    return _recognition_response(result, len(query), _fetch_song(result.song_id, connection))
 
 
 def recognize_file_with_explanation(
-    path: Path, client: Client, config: SignalConfig = DEFAULT_CONFIG
+    path: Path, connection: sqlite3.Connection, config: SignalConfig = DEFAULT_CONFIG
 ) -> dict[str, object]:
     """Recognize a query and return bounded signal and matching evidence."""
     analysis = analyze_query_file(path, config)
-    catalog = fetch_matching_catalog(analysis.fingerprints, client, config)
+    catalog = fetch_matching_catalog(analysis.fingerprints, connection, config)
     result = match_fingerprints(analysis.fingerprints, catalog, config)
 
     catalog_hashes = {
@@ -214,7 +222,7 @@ def recognize_file_with_explanation(
         source_interval: dict[str, float] | None = None
         winning_traces: tuple[FingerprintTrace, ...] = ()
     else:
-        song = _fetch_song(result.song_id, client)
+        song = _fetch_song(result.song_id, connection)
         recognition = _recognition_response(result, len(analysis.fingerprints), song)
         winning_evidence = build_winning_fingerprint_evidence(
             analysis.traces,
@@ -314,18 +322,13 @@ def _validate_audio_path(path: Path) -> None:
         raise ValueError("audio must be WAV, MP3, FLAC, or OGG")
 
 
-def _fetch_song(song_id: str, client: Client) -> dict[str, str]:
-    song_rows = _rows(
-        client.table("songs")
-        .select("id,name,spotify_url")
-        .eq("id", song_id)
-        .limit(1)
-        .execute()
-        .data
-    )
-    if not song_rows:
+def _fetch_song(song_id: str, connection: sqlite3.Connection) -> dict[str, str]:
+    song = connection.execute(
+        "SELECT id, name, spotify_url FROM songs WHERE id = ?",
+        (int(song_id),),
+    ).fetchone()
+    if song is None:
         raise RuntimeError("Matched song metadata is missing")
-    song = song_rows[0]
     return {
         "id": str(song["id"]),
         "name": str(song["name"]),
@@ -358,18 +361,18 @@ def _no_match() -> dict[str, object]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fingerprint a local song into Supabase")
+    parser = argparse.ArgumentParser(description="Fingerprint a local song into SQLite")
     parser.add_argument("audio", type=Path)
     parser.add_argument("--name", required=True)
     parser.add_argument("--spotify-url", required=True)
     args = parser.parse_args()
-    from .supabase_client import get_supabase_client
-    result = ingest_song(
-        resolve_catalog_audio(args.audio),
-        args.name,
-        args.spotify_url,
-        get_supabase_client(),
-    )
+    with closing(connect_database()) as connection:
+        result = ingest_song(
+            resolve_catalog_audio(args.audio),
+            args.name,
+            args.spotify_url,
+            connection,
+        )
     print(f"Stored {result['name']} with {result['fingerprintCount']} fingerprints")
 
 
