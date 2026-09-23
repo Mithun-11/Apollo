@@ -78,7 +78,7 @@ def test_explain_route_returns_successful_response_and_cleans_temp_file(
         return _explanation_response(matched=True)
 
     monkeypatch.setattr(main, "recognize_file_with_explanation", recognize)
-    monkeypatch.setattr(main, "get_supabase_client", lambda: object())
+    monkeypatch.setattr(main, "connect_database", io.BytesIO)
 
     response = TestClient(main.app).post(
         "/recognize/explain",
@@ -96,7 +96,7 @@ def test_explain_route_returns_no_match_response(monkeypatch: Any) -> None:
         "recognize_file_with_explanation",
         lambda _path, _client: _explanation_response(matched=False),
     )
-    monkeypatch.setattr(main, "get_supabase_client", lambda: object())
+    monkeypatch.setattr(main, "connect_database", io.BytesIO)
 
     response = TestClient(main.app).post(
         "/recognize/explain",
@@ -121,7 +121,7 @@ def test_existing_recognize_contract_is_unchanged(monkeypatch: Any) -> None:
         "matchCount": 8,
     }
     monkeypatch.setattr(main, "recognize_file", lambda _path, _client: expected)
-    monkeypatch.setattr(main, "get_supabase_client", lambda: object())
+    monkeypatch.setattr(main, "connect_database", io.BytesIO)
 
     response = TestClient(main.app).post(
         "/recognize",
@@ -152,7 +152,7 @@ def test_invalid_audio_uses_error_envelope(monkeypatch: Any) -> None:
         raise ValueError("audio could not be decoded")
 
     monkeypatch.setattr(main, "recognize_file_with_explanation", reject)
-    monkeypatch.setattr(main, "get_supabase_client", lambda: object())
+    monkeypatch.setattr(main, "connect_database", io.BytesIO)
 
     response = TestClient(main.app).post(
         "/recognize/explain",

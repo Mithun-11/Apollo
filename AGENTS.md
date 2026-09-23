@@ -1,215 +1,97 @@
 # Apollo agent guide
 
-This file is the persistent onboarding context for coding agents working in this repository. Keep it accurate and concise. Add subsystem-specific `AGENTS.md` files only if the frontend and backend eventually need genuinely different rules.
+## Start every task
 
-## Start every task here
+1. Inspect the relevant code, tests, and one comparable pattern before editing.
+2. Treat `PROJECT_PLAN.md` and `CONSTRAINTS.md` as the current scope and quality floor.
+3. State assumptions that affect behavior, API shape, signal parameters, schema, or scope.
+4. Make the smallest complete change and run the relevant checks.
+5. Report changes, verification, and limitations. Do not commit or push unless asked.
 
-1. Read `Current state` below as the authoritative progress marker, then read the relevant
-   section of `PROJECT_PLAN.md` and all of `CONSTRAINTS.md`.
-2. Inspect the files involved, their tests, and one existing comparable pattern before editing.
-3. State any assumption that would affect behavior, API shape, signal parameters, schema, or scope.
-4. Make the smallest complete change and run the relevant checks below.
-5. Report what changed, what was verified, and any known limitation. Do not commit or push unless explicitly asked.
+## Current state
 
-If the plan, code, and user request disagree, stop and name the conflict. The user's latest explicit instruction wins; update the documentation before implementing a changed architectural decision.
-
-## Project purpose and priority
-
-Apollo is a university signal-processing project that recognizes songs from short audio clips and estimates the matching timestamp.
-
-The learning/demo priority is the explainable signal pipeline:
+Apollo has a deterministic signal core, local SQLite catalog, FastAPI routes, catalog CLI, and
+Next.js microphone/explainability UI. Existing remote fingerprints are intentionally not migrated;
+the catalog is regenerated into `data/apollo-v3.db` and shared outside Git.
 
 ```text
 audio → mono/resample → STFT/spectrogram → peak detection
       → constellation map → deterministic fingerprints
-      → hash lookup → time-offset voting → match
+      → SQLite hash lookup → time-offset voting → match
 ```
 
-Correct, visible signal processing matters more than production infrastructure or UI polish. Use
-`PROJECT_PLAN.md` as a roadmap and keep its current-state notes accurate; the implemented baseline
-is already beyond the original teacher-demo stages.
-
-## Current state
-
-- **Current implementation boundary:** The signal core, explainable FastAPI routes, Supabase
-  adapter/schema, catalog fingerprinting CLI, and explainable microphone frontend are implemented.
-- The repository has pinned Python and npm environments, CI, dependency smoke coverage,
-  and synthetic signal/demo tests.
-- The reusable signal service loads and normalizes audio, extracts spectral peaks, creates
-  deterministic fingerprints with transient traces, matches songs by time-offset voting, and
-  rejects weak or ambiguous winners using absolute, normalized-support, and runner-up gates.
-- The explanation service creates bounded waveform, spectrogram, peak, alignment, and vote data
-  without changing recognition or persisted fingerprints.
-- The local demo fingerprints ignored catalog audio, reads a user-supplied clip from
-  `demo-clip/`, and saves the waveform, spectrogram, peak, constellation, and vote visualizations.
-- `POST /songs` fingerprints a local audio file and stores only its name, Spotify URL, and
-  fingerprints; `POST /recognize` matches a microphone clip and returns the song plus source
-  timestamp; `POST /recognize/explain` returns the same recognition object plus bounded query and
-  winning-evidence diagnostics.
-- Catalog source files may live in a sibling `Songs/` folder next to the `Apollo/` checkout; the
-  CLI resolves relative paths and never stores the source audio.
-- The Next.js frontend records up to ten seconds from the microphone, shows live waveform/level
-  feedback and local playback, and calls `/backend/recognize/explain` for the dashboard.
-- Supabase credentials stay in `backend/.env`; audio files are processed temporarily and are not
-  stored.
-
-Update this section in the same change that completes a stage or materially changes which
-subsystems exist. Do not infer project progress from the roadmap alone.
-
-Never describe a planned file, endpoint, table, or feature as already implemented.
-
-## Stack and fixed toolchain
-
-- Python 3.13.11
-- NumPy, SciPy, librosa, soundfile, and Matplotlib for signal work
-- FastAPI, Uvicorn, and supabase-py for the backend API and Supabase adapter
-- Next.js 16.3.4, React 19.2.4, TypeScript 5.9.3, and Tailwind CSS 4.1.18
-- Node.js 22.19.0 and npm 11.8.0
-- pytest, Ruff, and mypy for backend checks; ESLint and TypeScript for frontend checks
-
-Use Context7 or current official documentation before relying on framework/library-specific syntax. Do not upgrade, add, or replace a dependency as a side effect of feature work.
-
-## Repository map
-
-```text
-backend/
-  app/                  Python application package
-    services/           Pure signal-processing services
-  tests/                Backend and signal tests
-  requirements.txt      Exact Python dependency lock
-  pyproject.toml         pytest, Ruff, and mypy configuration
-
-frontend/
-  app/                   Next.js App Router UI
-  package.json           Frontend scripts and direct dependencies
-  package-lock.json      Exact npm dependency lock
-
-demo-data/               Local ignored songs/query clips; README is tracked
-.github/                 CI, Dependabot, and pull-request template
-PROJECT_PLAN.md          Approved staged roadmap and planned contracts
-CONSTRAINTS.md           Non-negotiable quality and safety floor
-README.md                Human setup and collaboration instructions
-```
-
-Create new directories only when the current task produces a real file for them. Do not scaffold empty abstractions for future stages.
+The API starts only when the configured database exists. Audio is processed temporarily and is
+never stored.
 
 ## Architecture boundaries
 
-Preserve this dependency direction:
-
 ```text
 UI → frontend/lib/api.ts → Next.js /backend/* proxy
-   → FastAPI routes → signal services → Supabase adapter
+   → FastAPI routes → signal services → SQLite adapter
 ```
 
-- Signal services accept ordinary Python values, NumPy arrays, paths, or file-like inputs and return typed Python results.
-- Signal services must not import FastAPI or Supabase, read CLI input, access global mutable state, print instead of returning results, generate plots as a required side effect, or rely on hard-coded local paths.
-- Plotting/demo code calls signal services; signal services do not call plotting/demo code.
-- Matching consumes fingerprint records as data and must not care whether they came from an in-memory collection or Supabase.
-- FastAPI routes validate/translate HTTP input and call services. Never place FFT, peak detection, hashing, or matching logic in a route.
-- React components never access Supabase or hard-code FastAPI URLs. All backend requests and response types belong in `frontend/lib/api.ts`.
-- Keep Supabase service-role credentials backend-only. No secret may use a `NEXT_PUBLIC_` variable.
+- Signal services accept ordinary Python/NumPy values and never import FastAPI or database code.
+- Database conversion and connection behavior live in `backend/app/database.py`.
+- Plotting/explanation code calls signal services; signal services do not call it.
+- Matching consumes fingerprint records as data and remains independent of persistence.
+- Routes validate HTTP input and delegate; DSP and SQL do not belong in route handlers.
+- React never reads SQLite or hard-codes the FastAPI URL.
 
-## Signal-processing rules
+## Signal rules
 
-- Centralize sample rate, FFT/window size, hop length, peak neighborhood, anchor fan-out, time-delta limits, and match threshold in one configuration object/module.
-- Give every fingerprint configuration an explicit version. Persisted/query fingerprints with different versions must never be compared.
-- Fingerprints must be deterministic across processes and machines. Never use Python's randomized built-in `hash()` for stored hashes.
-- Keep time units explicit in names and types: frames, samples, seconds, and hertz are not interchangeable.
-- Normalize catalog songs and queries through the same preprocessing path.
-- Prefer clear NumPy/SciPy operations over custom frameworks or speculative optimization. Measure before optimizing.
-- Hardware/audio behavior needs calibration knobs; do not hide important signal constants throughout the code.
+- Keep signal parameters centralized in `SignalConfig` and preserve `fingerprint_version`.
+- Never compare fingerprints with different versions.
+- Never use Python's randomized `hash()` for stored hashes.
+- Do not change the fingerprint algorithm or calibrated thresholds without approval and regenerated
+  catalog data.
+- Keep frames, samples, seconds, and hertz explicit.
 
-## Coding conventions
+## SQLite rules
 
-### Python
+- Use only Python's standard-library `sqlite3`; no ORM or database server.
+- The schema is `data/schema.sql`; generated `data/*.db` files stay out of Git.
+- Enable foreign keys on every connection. Keep WAL and `synchronous=NORMAL` unless measurements
+  justify a change.
+- Convert hashes only through the centralized lossless helpers.
+- Insert a song and its fingerprints in one transaction with `executemany()`.
+- Query hashes in bounded batches through `(fingerprint_version, hash_value)`; never load the full
+  catalog during normal startup.
+- Normal startup must report a missing database rather than silently create one.
 
-- Use type hints for public functions and small typed result models where multiple values would otherwise be ambiguous.
-- Use `snake_case` for files/functions/variables and `PascalCase` for classes.
-- Keep functions focused and deterministic where practical; validate at file/API boundaries rather than repeatedly inside trusted helpers.
-- Raise descriptive exceptions from services; entry points translate them into CLI messages or API errors.
-- Tests live under `backend/tests/` and should use synthetic signals or tiny legal fixtures.
+## Coding rules
 
-### TypeScript and React
-
-- Keep TypeScript strict; do not add `any`, `@ts-ignore`, or lint suppressions to get green checks.
-- Use accessible semantic HTML and explicit loading, empty, and error states.
-- Keep components small and local until reuse is proven; do not create a component framework for the first screen.
-- Browser microphone and file input are untrusted boundaries. Validate again in FastAPI.
+- Python public functions use type hints; keep functions focused and deterministic.
+- TypeScript stays strict: no `any`, `@ts-ignore`, or lint suppression to force a pass.
+- Validate uploads at FastAPI boundaries and preserve accessible loading/error/empty UI states.
+- Do not add or upgrade dependencies as a side effect.
+- Do not commit secrets, copyrighted audio, generated databases, caches, or local environments.
 
 ## Required verification
 
-Run only the checks relevant to changed areas, then run the complete affected group before handoff.
+Backend from `backend/`:
 
-Backend, from `backend/` with `.venv` active:
-
-```bash
+```text
 python -m ruff check app tests
 python -m mypy app
 python -m pytest
 ```
 
-Frontend, from `frontend/`:
+Frontend from `frontend/`:
 
-```bash
+```text
 npm run lint
 npm run typecheck
 npm run build
 ```
 
-For dependency or lockfile changes, also run:
+For dependency changes also run `python -m pip check`, `python -m pip_audit --local`, `npm ci`, and
+`npm audit --audit-level=high` for the affected ecosystem. Never skip/delete tests or weaken checks
+to get green.
 
-```bash
-python -m pip check
-python -m pip_audit --local
-npm ci
-npm audit --audit-level=high
-```
+## Git
 
-Do not skip/delete tests, loosen thresholds, add suppressions, or change expected behavior merely to make checks pass.
+Use short-lived `feature/*`, `fix/*`, or `chore/*` branches. Do not discard another developer's
+uncommitted work, force-push shared branches, or commit/push unless explicitly asked.
 
-## Always, ask first, never
-
-Always:
-
-- Preserve exact dependency lockfiles and cross-platform Windows/macOS compatibility.
-- Add the smallest runnable test for non-trivial signal or matching logic.
-- Keep generated plots, caches, local environments, and audio outside Git.
-- Update the plan/README/API documentation when a public contract or setup command changes.
-
-Ask first:
-
-- API endpoint or response-shape changes.
-- Fingerprint algorithm/configuration changes after data has been generated.
-- Database schema/migration, CI, runtime version, or dependency changes.
-- Adding authentication, deployment, or public network exposure.
-
-Never:
-
-- Commit secrets, real `.env` files, Supabase keys, or copyrighted audio.
-- Edit an applied migration; create the next numbered migration.
-- Add ORM, Alembic, Docker, Redis, Celery, FFmpeg, direct PostgreSQL drivers, background workers, or another state-management layer without a measured need and approval.
-- Let frontend code call Supabase directly or put database/DSP logic in UI/API adapters.
-- Invent completed features, tests, benchmark results, or database state.
-
-## Git collaboration
-
-- Keep `main` working and use short-lived `feature/*`, `fix/*`, or `chore/*` branches.
-- Keep commits atomic and use `feat:`, `fix:`, `test:`, `docs:`, `refactor:`, or `chore:` prefixes.
-- Do not mix dependency upgrades, formatting sweeps, refactors, and behavior changes in one pull request.
-- Do not overwrite or discard another developer's uncommitted work.
-- Never force-push shared branches.
-
-## graphify
-(If graphify not present then skip that)
-
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+If `graphify-out/graph.json` exists, use graphify queries for codebase navigation and run
+`graphify update .` after code changes.

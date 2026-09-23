@@ -1,142 +1,71 @@
 # Apollo
 
-Apollo is a university signal-processing project for recognizing songs from short audio clips. The
-reusable Python fingerprinting core is wrapped by FastAPI, Supabase persistence, and a Next.js
-microphone interface.
+Apollo recognizes songs from short microphone recordings and estimates the matching source
+timestamp. Its explainable pipeline is:
 
-See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the staged roadmap,
-[SIGNAL_PROCESSING_GUIDE.md](SIGNAL_PROCESSING_GUIDE.md) for the Stage 1 theory and implementation,
-and [CONSTRAINTS.md](CONSTRAINTS.md) for the project-wide quality rules.
+```text
+audio → mono/resample → STFT → spectral peaks → constellation fingerprints
+      → indexed SQLite lookup → time-offset voting → match
+```
 
-## Project status
-
-The signal core, FastAPI/Supabase integration, catalog CLI, and explainable microphone frontend
-are wired together. The `Current state` section in [AGENTS.md](AGENTS.md) is the authoritative
-progress marker.
-
-## Required versions
+## Requirements
 
 - Python 3.13.11
 - Node.js 22.19.0
 - npm 11.8.0
 
-Do not upgrade dependencies directly on `main`. Both ecosystems use committed exact versions, and updates should arrive through reviewed pull requests.
+## Backend
 
-## Backend setup
-
-Windows PowerShell:
+Create the environment from `backend/`, then initialize the local database from the same folder:
 
 ```powershell
-cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+python -m app.database
 ```
 
-macOS zsh:
+The default database is `data/apollo-v3.db` (fingerprint version 3). Set `APOLLO_DB_PATH` to use another snapshot. Normal API
+startup fails clearly when the database is missing; it never creates an empty catalog implicitly.
+Generated database files are ignored by Git and should be distributed separately.
 
-```bash
-cd backend
-python3.13 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+Add a song without storing its audio:
+
+```powershell
+python -m app.catalog "C:\path\to\song.wav" --name "Song title" --spotify-url "https://open.spotify.com/track/..."
 ```
 
-Backend checks:
-
-```bash
-python -m ruff check app tests
-python -m mypy app
-python -m pytest
-python -m pip_audit --local
-```
-
-The virtual environment is local and must never be committed.
-
-Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` in `backend/.env`, then start the API from `backend/`:
+Start the API:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-Fingerprint a downloaded song without storing its audio:
+Backend checks:
 
 ```powershell
-python -m app.catalog "..\..\Songs\song.wav" --name "Song title" --spotify-url "https://open.spotify.com/track/..."
+python -m ruff check app tests
+python -m mypy app
+python -m pytest
+python -m pip check
+python -m pip_audit --local
 ```
 
-The example assumes a sibling layout: `Apollo/` and `Songs/` are next to each other. You can also
-pass a filename from that sibling folder; the catalog command resolves it without storing an
-absolute machine-specific path.
+## Frontend
 
-The frontend proxies `/backend/*` to `BACKEND_URL` (default `http://127.0.0.1:8000`).
+From `frontend/`:
 
-The API keeps `POST /recognize` as the compact recognition contract and adds
-`POST /recognize/explain` for the dashboard. The explain endpoint returns the same recognition
-fields plus bounded waveform, spectrogram, peak, fingerprint-alignment, offset-vote, and pipeline
-count data. Explanation data is temporary; no audio or raw fingerprint hashes are persisted or
-returned. The browser also provides a live waveform, coarse input level, stoppable countdown, and
-local playback of the captured WAV.
-
-## Stage 1 signal demo
-
-Place at least two full songs in `demo-data/` and your short query clips in `demo-clip/`.
-To create a clip from a full song, run this from `backend/`:
-
-```bash
-python -m app.create_clip "Cold.wav" 60 8
-```
-
-This extracts 8 seconds starting at 60 seconds and writes `clip_1.wav` to `demo-clip/`.
-Later clips become `clip_2.wav`, `clip_3.wav`, and so on.
-
-Then run the demo from `backend/`, passing only the clip filename:
-
-```bash
-python -m app.demo "your-clip.wav"
-```
-
-The command fingerprints the catalog in memory, identifies which full song contains the clip,
-prints its source timestamp, and saves the signal-pipeline and time-offset-vote plots under
-`artifacts/stage1/`. Local audio and generated output are ignored by Git.
-
-## Frontend setup
-
-```bash
-cd frontend
+```powershell
 npm ci
 npm run dev
 ```
 
-Open <http://localhost:3000>. Frontend checks are:
+The frontend calls FastAPI only through the Next.js `/backend/*` proxy. `BACKEND_URL` defaults to
+`http://127.0.0.1:8000`.
 
-```bash
-npm run lint
-npm run typecheck
-npm run build
-npm audit --audit-level=high
-```
+## Storage
 
-## Local data and secrets
-
-- Copy environment examples to their untracked local equivalents when those integrations are implemented.
-- The schema is applied from `supabase/migrations/20260911000000_initial_schema.sql` and stores
-  song name, Spotify URL, and acoustic fingerprints only.
-- Put demonstration songs and excerpts under `demo-data/`. Audio there is ignored so copyrighted music cannot be committed accidentally.
-
-## Git workflow
-
-Work on short-lived `feature/*`, `fix/*`, or `chore/*` branches. Open a pull request into `main`, let CI pass on Windows and macOS, and have the other developer review it. Do not commit generated output, secrets, dependency folders, or local environments.
-
-## Graphify setup
-
-Graphify data is local and ignored by Git. After installing Graphify, initialize each clone and
-enable automatic code-index refreshes:
-
-```bash
-graphify extract . --code-only
-graphify hook install
-```
-
-The hooks refresh code changes after commits and checkouts. `AGENTS.md`, not the local graph, remains
-the source of truth for the current project stage.
+`data/schema.sql` defines `songs` and `acoustic_fingerprints`. Fingerprint hashes remain 16-digit
+hexadecimal strings in signal code and are mapped losslessly to signed 64-bit SQLite integers at
+the database boundary. Recognition performs batched indexed lookups and preserves the existing
+time-offset scoring behavior. Catalog audio and microphone uploads are never persisted.
