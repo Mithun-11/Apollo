@@ -129,6 +129,26 @@ button:disabled { cursor: wait; opacity: 0.4; }
   opacity: 1;
 }
 
+/* Audio source picker (microphone or browser tab) */
+.source-picker {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+}
+.source-option {
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  padding: 8px 16px;
+}
+.source-option-active {
+  background: var(--text-primary);
+  color: #09090b;
+}
+
 /* Recording pulse animation for the button */
 @keyframes pulse-ring {
   0%   { box-shadow: 0 0 0 0 rgba(251,191,36,0.55); }
