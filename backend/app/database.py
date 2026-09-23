@@ -7,7 +7,7 @@ from contextlib import closing
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "apollo.db"
+DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "apollo-v3.db"
 SCHEMA_PATH = PROJECT_ROOT / "data" / "schema.sql"
 
 

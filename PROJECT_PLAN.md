@@ -31,7 +31,7 @@ migrated; each developer generates or receives the same separately distributed d
 ## Next work
 
 1. Generate the new SQLite catalog from the legal local song set.
-2. Distribute one identical `data/apollo.db` snapshot to both developers outside Git.
+2. Distribute one identical `data/apollo-v3.db` snapshot to both developers outside Git.
 3. Measure fingerprint generation, database lookup, scoring, and total recognition time on that
    catalog before considering further optimization.
 4. Run clean, short, gain-adjusted, and noisy clip evaluation and record accuracy/timestamp error.

@@ -25,7 +25,7 @@ python -m pip install -r requirements.txt
 python -m app.database
 ```
 
-The default database is `data/apollo.db`. Set `APOLLO_DB_PATH` to use another snapshot. Normal API
+The default database is `data/apollo-v3.db` (fingerprint version 3). Set `APOLLO_DB_PATH` to use another snapshot. Normal API
 startup fails clearly when the database is missing; it never creates an empty catalog implicitly.
 Generated database files are ignored by Git and should be distributed separately.
 

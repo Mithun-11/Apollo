@@ -71,12 +71,12 @@ def test_create_fingerprints_is_deterministic() -> None:
     assert all(len(fingerprint.hash_value) == 16 for fingerprint in first)
     assert all(fingerprint.version == config.fingerprint_version for fingerprint in first)
     assert tuple(fingerprint.hash_value for fingerprint in first) == (
-        "3279a0446350426c",
-        "68873a849acee4da",
-        "089f025cd3e72db0",
-        "0ebfc1589132716c",
-        "00f68b9a6ab64c22",
-        "a65ca34f49edd8e5",
+        "945c5ba681702411",
+        "88684a83c9d516d8",
+        "71c89fdb952a8d3e",
+        "70ee8d622409d817",
+        "5acf571ebd795750",
+        "7e30a836f3d56c21",
     )
 
 
@@ -146,15 +146,29 @@ def test_match_fingerprints_returns_song_and_source_timestamp() -> None:
     assert result.match_count >= config.match_threshold
 
 
-def test_match_fingerprints_rejects_weak_query_support() -> None:
-    config = SignalConfig(
-        match_threshold=5,
-        min_match_ratio=0.2,
-        min_winner_ratio=1.0,
+def test_match_fingerprints_ignores_negative_offsets() -> None:
+    config = SignalConfig(match_threshold=5, min_winner_ratio=1.0)
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=100 + index, version=config.fingerprint_version)
+        for index in range(10)
     )
+    catalog = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame - 50,
+            version=config.fingerprint_version,
+        )
+        for fingerprint in query
+    )
+
+    assert match_fingerprints(query, {"before-song-start": catalog}, config) is None
+
+
+def test_match_fingerprints_is_not_diluted_by_unmatched_query_hashes() -> None:
+    config = SignalConfig(match_threshold=10, min_winner_ratio=2.0)
     query = tuple(
         Fingerprint(f"query-{index}", anchor_frame=index, version=config.fingerprint_version)
-        for index in range(100)
+        for index in range(5_000)
     )
     catalog = tuple(
         Fingerprint(
@@ -162,16 +176,42 @@ def test_match_fingerprints_rejects_weak_query_support() -> None:
             anchor_frame=fingerprint.anchor_frame + 50,
             version=config.fingerprint_version,
         )
-        for fingerprint in query[:10]
+        for fingerprint in query[:12]
     )
 
-    assert match_fingerprints(query, {"accidental-song": catalog}, config) is None
+    result = match_fingerprints(query, {"noisy-recording": catalog}, config)
+
+    assert result is not None
+    assert result.song_id == "noisy-recording"
+    assert result.match_count == 12
+
+
+def test_match_fingerprints_combines_adjacent_offset_frames() -> None:
+    config = SignalConfig(match_threshold=3, min_winner_ratio=1.0, offset_tolerance_frames=1)
+    query = tuple(
+        Fingerprint(f"query-{index}", anchor_frame=index * 10, version=config.fingerprint_version)
+        for index in range(3)
+    )
+    catalog = tuple(
+        Fingerprint(
+            fingerprint.hash_value,
+            anchor_frame=fingerprint.anchor_frame + shift,
+            version=config.fingerprint_version,
+        )
+        for fingerprint, shift in zip(query, (99, 99, 101), strict=True)
+    )
+
+    result = match_fingerprints(query, {"source-song": catalog}, config)
+
+    assert result is not None
+    assert result.offset_frame == 100
+    assert result.match_count == 3
+    assert result.offset_votes == ((99, 2), (101, 1))
 
 
 def test_match_fingerprints_rejects_votes_below_absolute_threshold() -> None:
     config = SignalConfig(
         match_threshold=6,
-        min_match_ratio=0.0,
         min_winner_ratio=1.0,
     )
     query = tuple(
@@ -193,7 +233,6 @@ def test_match_fingerprints_rejects_votes_below_absolute_threshold() -> None:
 def test_match_fingerprints_rejects_ambiguous_competing_song() -> None:
     config = SignalConfig(
         match_threshold=5,
-        min_match_ratio=0.0,
         min_winner_ratio=1.5,
     )
     query = tuple(
@@ -230,7 +269,6 @@ def test_match_fingerprints_rejects_ambiguous_competing_song() -> None:
 def test_match_fingerprints_accepts_clear_winner() -> None:
     config = SignalConfig(
         match_threshold=5,
-        min_match_ratio=0.5,
         min_winner_ratio=1.5,
     )
     query = tuple(
@@ -263,3 +301,64 @@ def test_match_fingerprints_accepts_clear_winner() -> None:
     assert result is not None
     assert result.song_id == "clear-winner"
     assert result.match_count == 10
+
+
+def test_extract_peaks_ignores_frequencies_outside_the_band() -> None:
+    config = SignalConfig(
+        sample_rate=8_000,
+        n_fft=512,
+        hop_length=128,
+        min_frequency_hz=300.0,
+        max_frequency_hz=2_000.0,
+    )
+    time = np.arange(config.sample_rate * 2, dtype=np.float32) / config.sample_rate
+    samples = (
+        np.sin(2 * np.pi * 100 * time)
+        + np.sin(2 * np.pi * 1_000 * time)
+        + np.sin(2 * np.pi * 3_000 * time)
+    ).astype(np.float32)
+
+    peaks = extract_peaks(samples, config).peaks
+    frequencies_hz = [peak.frequency_bin * config.sample_rate / config.n_fft for peak in peaks]
+
+    assert peaks
+    assert all(300.0 <= frequency <= 2_000.0 for frequency in frequencies_hz)
+
+
+def test_extract_peaks_keeps_a_bounded_budget_per_second() -> None:
+    config = SignalConfig(
+        sample_rate=8_000,
+        n_fft=512,
+        hop_length=128,
+        peak_neighborhood_frequency_bins=3,
+        peak_neighborhood_time_frames=3,
+        peaks_per_second=5,
+    )
+    samples = np.random.default_rng(7).standard_normal(config.sample_rate * 3).astype(np.float32)
+    frames_per_second = round(config.sample_rate / config.hop_length)
+
+    peaks = extract_peaks(samples, config).peaks
+    per_second = np.bincount([peak.time_frame // frames_per_second for peak in peaks])
+
+    assert peaks
+    assert per_second.max() <= config.peaks_per_second
+    assert [(peak.time_frame, peak.frequency_bin) for peak in peaks] == sorted(
+        (peak.time_frame, peak.frequency_bin) for peak in peaks
+    )
+
+
+def test_fingerprints_only_pair_peaks_within_the_frequency_zone() -> None:
+    config = SignalConfig(
+        fan_out=5, min_time_delta_frames=1, max_time_delta_frames=8, max_frequency_delta_bins=20
+    )
+    peaks = (
+        Peak(frequency_bin=10, time_frame=0, amplitude_db=-1.0),
+        Peak(frequency_bin=25, time_frame=2, amplitude_db=-2.0),
+        Peak(frequency_bin=200, time_frame=3, amplitude_db=-3.0),
+    )
+
+    _, traces = create_fingerprints_with_traces(peaks, config)
+
+    assert [(trace.anchor_frequency_bin, trace.target_frequency_bin) for trace in traces] == [
+        (10, 25)
+    ]

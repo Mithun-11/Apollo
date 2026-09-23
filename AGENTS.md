@@ -12,7 +12,7 @@
 
 Apollo has a deterministic signal core, local SQLite catalog, FastAPI routes, catalog CLI, and
 Next.js microphone/explainability UI. Existing remote fingerprints are intentionally not migrated;
-the catalog is regenerated into `data/apollo.db` and shared outside Git.
+the catalog is regenerated into `data/apollo-v3.db` and shared outside Git.
 
 ```text
 audio → mono/resample → STFT/spectrogram → peak detection

@@ -56,7 +56,7 @@ def test_ingest_song_stores_integer_hashes_in_one_transaction(
 def test_recognition_reads_only_matching_hashes_from_sqlite(
     tmp_path: Path, monkeypatch: object
 ) -> None:
-    config = SignalConfig(match_threshold=1, min_match_ratio=0, min_winner_ratio=1)
+    config = SignalConfig(match_threshold=1, min_winner_ratio=1)
     query = (Fingerprint("8000000000000000", 5, config.fingerprint_version),)
     database_path = initialize_database(tmp_path / "apollo.db")
 
