@@ -29,6 +29,20 @@ The default database is `data/apollo-v3.db` (fingerprint version 3). Set `APOLLO
 startup fails clearly when the database is missing; it never creates an empty catalog implicitly.
 Generated database files are ignored by Git and should be distributed separately.
 
+### Getting the database
+
+A ready-made catalog is published as a GitHub Release, so songs do not need to be fingerprinted
+locally. From the `Apollo` folder (back up your own `data/apollo-v3.db` first):
+
+```powershell
+gh release download db-2026-09-24 -p apollo-v3.db.zip -D data
+Expand-Archive data\apollo-v3.db.zip -DestinationPath data -Force
+```
+
+On macOS/Linux use `unzip -o data/apollo-v3.db.zip -d data` for the second step. Release
+`db-2026-09-24` holds 21 songs with fingerprint version 3 and melody features (`melody-1`).
+Newer releases are listed under the repository's Releases page.
+
 Add a song without storing its audio:
 
 ```powershell
