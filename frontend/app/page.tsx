@@ -279,6 +279,7 @@ export default function Home() {
   const [decoded, setDecoded] = useState<{ samples: Float32Array; rate: number } | null>(null);
   // Set when someone opens the replay; nothing heavy runs before that.
   const [evidenceWanted, setEvidenceWanted] = useState(false);
+  const [skyEpoch, setSkyEpoch] = useState(0);
 
   useEffect(() => {
     unmounted.current = false; // Reset on every (re)mount — React Strict Mode runs cleanup + remount in dev.
@@ -394,6 +395,7 @@ export default function Home() {
     replacePlaybackUrl(null);
     setVolume(0);
     setChecks([]);
+    setSkyEpoch((value) => value + 1);
     setCheckMessage("Waiting for the first check at 2 seconds");
     if (!keeper.isReady()) setState({ phase: "starting-microphone" });
     let session: RecordingSession | null = null;
@@ -617,9 +619,17 @@ export default function Home() {
     setPendingReplay(null);
   }
 
-  function listenAgain() {
+  // Back to the start screen: the sky is cleared and nothing records until Listen is pressed.
+  function goHome() {
+    if (busy.current) return;
     closeReplay();
-    void listen();
+    setEvidence(null);
+    setDecoded(null);
+    setEvidenceWanted(false);
+    replacePlaybackUrl(null);
+    setChecks([]);
+    setSkyEpoch((value) => value + 1);
+    setState({ phase: "ready" });
   }
 
   const isBusy =
@@ -664,6 +674,7 @@ export default function Home() {
         durationSeconds={MAX_RECORDING_SECONDS}
         checks={liveChecks}
         opacity={replaying ? 0 : result ? 0.4 : 1}
+        epoch={skyEpoch}
       />
       <Horizon />
 
@@ -680,7 +691,7 @@ export default function Home() {
           recordingUrl={playbackUrl}
           onExit={closeReplay}
           onClassMode={() => openReplay("class")}
-          onListenAgain={listenAgain}
+          onHome={goHome}
         />
       ) : result || confirmedEarly ? (
         <TitleCard
@@ -689,7 +700,7 @@ export default function Home() {
           waiting={pendingReplay !== null}
           onWatch={() => openReplay("highlight")}
           onClassMode={() => openReplay("class")}
-          onListenAgain={listenAgain}
+          onHome={goHome}
         />
       ) : (
         <section className="console" aria-label="Listen for a song">

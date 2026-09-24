@@ -42,7 +42,6 @@ export type ChapterId =
   | "warp"
   | "voice"
   | "listen"
-  | "speed"
   | "verdict";
 
 export type WorldLabel = {
@@ -633,7 +632,6 @@ export class ReplayWorld {
       case "listen":
       case "warp":
       case "voice":
-      case "speed":
       case "verdict":
         return wide;
       case "stars": {
@@ -808,10 +806,6 @@ export class ReplayWorld {
       case "listen":
         skyOpacity = 0.35;
         starLevel = 0.5;
-        break;
-      case "speed":
-        skyOpacity = 0.3;
-        starLevel = 0.45;
         break;
       case "verdict":
         skyOpacity = 0.5;

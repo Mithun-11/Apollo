@@ -1,21 +1,17 @@
 """Evidence for the class-mode replay, computed after the answer so recognition never waits.
 
-The frontend asks for this once a song has been recognized. Everything here is measured or
-computed from the same recording: stage timings of the fingerprint pipeline, the votes every
-catalog song received, the song's own peak constellation over the matched window, the
-speed/pitch search curve for edits, and the separated melody lines for covers.
+The frontend asks for this when the replay is opened. Everything here is computed from the same
+recording: the votes every catalog song received, the song's own peak constellation over the
+matched window, the speed/pitch search curve for edits, and the separated melody lines for covers.
 """
 
 from __future__ import annotations
 
 import re
 import sqlite3
-import time
 import unicodedata
-from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import TypeVar
 
 import librosa
 import numpy as np
@@ -26,7 +22,6 @@ from .services import vocal_separation
 from .services.melody_match import (
     DEFAULT_MELODY_CONFIG,
     extract_features,
-    match_melody,
     melody_cost,
 )
 from .services.signal import (
@@ -39,30 +34,10 @@ from .services.signal import (
 )
 from .services.speed_search import score_candidate_changes
 
-T = TypeVar("T")
 MAX_SONG_PEAKS = 1_500
 MAX_PATH_POINTS = 240
 SEPARATION_BINS = 72
 SEPARATION_FRAMES = 150
-
-
-class StageTimer:
-    """Runs pipeline stages and records how long each took."""
-
-    def __init__(self) -> None:
-        self.stages: list[dict[str, object]] = []
-
-    def run(self, stage: str, detail: str, work: Callable[[], T]) -> T:
-        started = time.perf_counter()
-        value = work()
-        self.stages.append(
-            {
-                "stage": stage,
-                "detail": detail,
-                "milliseconds": (time.perf_counter() - started) * 1000,
-            }
-        )
-        return value
 
 
 def build_evidence(
@@ -75,30 +50,12 @@ def build_evidence(
     match_method: str = "fingerprint",
     config: SignalConfig = DEFAULT_CONFIG,
 ) -> dict[str, object]:
-    timer = StageTimer()
-    timed = timer.run
-    audio = timed("Read audio", "decode, mix to mono, resample", lambda: load_audio(path, config))
+    audio = load_audio(path, config)
     duration = len(audio.samples) / audio.sample_rate
-    extraction = timed(
-        "Spectrogram and peaks",
-        "short-time Fourier transform, local maxima",
-        lambda: extract_peaks(audio.samples, config),
-    )
-    fingerprints, _ = timed(
-        "Fingerprints",
-        "pair each peak with nearby peaks, hash (f1, f2, Δt)",
-        lambda: create_fingerprints_with_traces(extraction.peaks, config),
-    )
-    catalog = timed(
-        "Database lookup",
-        "indexed SQLite search for every hash",
-        lambda: fetch_matching_catalog(fingerprints, connection, config),
-    )
-    diagnostics = timed(
-        "Offset voting",
-        "count agreeing time offsets per song",
-        lambda: analyze_fingerprint_match(fingerprints, catalog, config),
-    )
+    extraction = extract_peaks(audio.samples, config)
+    fingerprints, _ = create_fingerprints_with_traces(extraction.peaks, config)
+    catalog = fetch_matching_catalog(fingerprints, connection, config)
+    diagnostics = analyze_fingerprint_match(fingerprints, catalog, config)
 
     names = _song_names(connection)
     frame_seconds = config.hop_length / config.sample_rate
@@ -123,14 +80,10 @@ def build_evidence(
     edited = abs(speed_factor - 1) >= 0.01 or abs(pitch_factor - 1) >= 0.01
     speed_curve = None
     if edited:
-        scores = timed(
-            "Speed and pitch search",
-            "re-hash the peaks for 78 speed and pitch guesses",
-            lambda: score_candidate_changes(
-                extraction.peaks,
-                lambda query: fetch_matching_catalog(query, connection, config),
-                config,
-            ),
+        scores = score_candidate_changes(
+            extraction.peaks,
+            lambda query: fetch_matching_catalog(query, connection, config),
+            config,
         )
         speed_curve = [
             {
@@ -143,14 +96,9 @@ def build_evidence(
 
     song_file = find_song_file(song_id, names.get(song_id, ""), connection)
     song_sky = _song_sky(song_file, timestamp_seconds, duration * speed_factor, config)
-    melody = (
-        _melody_evidence(path, connection, song_id, duration, timer)
-        if match_method == "melody"
-        else None
-    )
+    melody = _melody_evidence(path, connection, song_id) if match_method == "melody" else None
     return {
         "durationSeconds": duration,
-        "timings": timer.stages,
         "songs": songs,
         "votes": votes,
         "catalogFingerprints": sum(int(str(song["fingerprints"])) for song in songs),
@@ -295,8 +243,6 @@ def _melody_evidence(
     path: Path,
     connection: sqlite3.Connection,
     song_id: str,
-    duration: float,
-    timer: StageTimer,
 ) -> dict[str, object] | None:
     if not vocal_separation.is_available():
         return None
@@ -305,21 +251,8 @@ def _melody_evidence(
     song = catalog.get(song_id)
     if song is None:
         return None
-    separated = timer.run(
-        "Vocal separation",
-        "Demucs neural network splits the voice from the band",
-        lambda: vocal_separation.separate_file(path, config.sample_rate),
-    )
-    features = timer.run(
-        "Pitch and chroma",
-        "pYIN pitch tracking and chroma of voice and mix",
-        lambda: extract_features(separated.vocals, separated.mix, config),
-    )
-    timer.run(
-        "Melody comparison",
-        f"12-key dynamic time warping against {len(catalog)} songs",
-        lambda: match_melody(features, duration, catalog, config),
-    )
+    separated = vocal_separation.separate_file(path, config.sample_rate)
+    features = extract_features(separated.vocals, separated.mix, config)
     query = np.asarray(features.melody)
     if len(query) < 4:
         return None

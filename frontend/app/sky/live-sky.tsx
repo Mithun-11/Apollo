@@ -30,6 +30,8 @@ type LiveSkyProps = {
   checks: LiveCheck[];
   /** 0 to 1: how much of the live painting to keep showing (fades out when the replay starts). */
   opacity: number;
+  /** Changes with every new Listen: the previous song is wiped from the sky at once. */
+  epoch: number;
 };
 
 export default function LiveSky({
@@ -39,6 +41,7 @@ export default function LiveSky({
   durationSeconds,
   checks,
   opacity,
+  epoch,
 }: LiveSkyProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const checksRef = useRef(checks);
@@ -55,6 +58,10 @@ export default function LiveSky({
     recordingRef.current = recording;
     if (recording) resetRef.current = true;
   }, [recording]);
+
+  useEffect(() => {
+    resetRef.current = true;
+  }, [epoch]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -171,7 +178,7 @@ export default function LiveSky({
     const draw = (now: number) => {
       const frame: SkyFrame = fitCanvas(canvas);
       context.clearRect(0, 0, frame.width, frame.height);
-      if (resetRef.current && recordingRef.current) {
+      if (resetRef.current) {
         reset();
         resetRef.current = false;
       }

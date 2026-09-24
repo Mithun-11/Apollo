@@ -235,11 +235,12 @@ Product context is in `PRODUCT.md`; the direction contract in `.impeccable/surfa
   them), Speed search (edits: the vote curve spikes at the found speed), Voice (covers: the
   singer's melody against the original, tied by the time-warping path), Alignment (the song's
   stars fly in and tie to the recording's with red threads; offset votes as light pillars),
-  Listen (only the peaks played as sine tones), Timing (measured stage times), Answer.
+  Listen (only the peaks played as sine tones), Answer.
   "Watch how it was found" plays a short highlight; "Class mode" is presenter-driven
   (arrow keys, Page Up/Down clickers, Space replays a stop, Esc leaves).
-- **Evidence endpoint:** `POST /recognize/evidence` (`backend/app/evidence.py`) is called after
-  the answer, never before it. It re-runs the fingerprint stages with timers, lists every song's
+- **Evidence endpoint:** `POST /recognize/evidence` (`backend/app/evidence.py`) is called only
+  when the replay is opened, so it never competes with the answer. It re-runs the fingerprint
+  stages, lists every song's
   votes and hash hits, extracts the song's own peaks over the matched window from its file in
   `Songs/` (matched by title; same-title versions and other-script titles by fingerprint), and
   for edits/covers the speed curve (`score_candidate_changes`, refactored out of

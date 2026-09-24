@@ -121,7 +121,6 @@ export type RecognitionExplanation = {
 };
 
 /** Replay evidence, fetched after the answer so recognition never waits for it. */
-export type StageTiming = { stage: string; detail: string; milliseconds: number };
 export type CatalogSong = { songId: string; name: string; fingerprints: number; hashHits: number };
 export type SongVote = { songId: string; votes: number; offsetSeconds: number };
 export type SpeedCandidate = { speedFactor: number; pitchFactor: number; votes: number };
@@ -138,7 +137,6 @@ export type MelodyEvidence = {
 };
 export type RecognitionEvidence = {
   durationSeconds: number;
-  timings: StageTiming[];
   songs: CatalogSong[];
   votes: SongVote[];
   catalogFingerprints: number;

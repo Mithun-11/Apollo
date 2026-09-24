@@ -18,8 +18,6 @@ export type ChapterSpec = {
   settle: number;
 };
 
-const ms = (value: number) => (value < 10 ? value.toFixed(1) : Math.round(value).toString());
-
 export function buildChapters(data: ReplayData): ChapterSpec[] {
   const { explanation, recognition } = data.response;
   const config = explanation.signalConfig;
@@ -28,8 +26,6 @@ export function buildChapters(data: ReplayData): ChapterSpec[] {
   const hopMs = (config.hopLength / data.sampleRate) * 1000;
   const slices = Math.round((data.duration * data.sampleRate) / config.hopLength);
   const pitches = config.fftSize / 2 + 1;
-  const timing = (stage: string) => data.evidence?.timings.find((item) => item.stage === stage)?.milliseconds;
-  const lookupMs = timing("Database lookup");
   const songCount = data.evidence?.songs.length;
   const totalHits = data.evidence?.songs.reduce((sum, song) => sum + song.hashHits, 0) ?? explanation.counts.matchingHashes;
   const decision = explanation.decision;
@@ -81,9 +77,7 @@ export function buildChapters(data: ReplayData): ChapterSpec[] {
       sentence: data.evidence
         ? `Every fingerprint is looked up in an index of ${formatCount(data.evidence.catalogFingerprints)} fingerprints from ${songCount} songs. The hits land all over the catalog, because most of them are coincidences.`
         : `Every fingerprint is looked up in the catalog's index. The hits land all over it, because most of them are coincidences.`,
-      figure: lookupMs !== undefined
-        ? { value: `${ms(lookupMs)} ms`, unit: `${formatCount(totalHits)} hits` }
-        : { value: formatCount(totalHits), unit: "hits" },
+      figure: { value: formatCount(totalHits), unit: "hits" },
       settle: 7,
     },
   ];
@@ -143,15 +137,6 @@ export function buildChapters(data: ReplayData): ChapterSpec[] {
       sentence: `This is the recording reduced to its ${formatCount(explanation.peaks.length)} stars, each played as a pure tone. Almost all of the sound is gone, yet the tune survives. That is why a few hundred peaks are enough to recognize a song.`,
       figure: null,
       settle: 4,
-    },
-    {
-      id: "speed",
-      short: "Timing",
-      kanji: "時間",
-      title: "How long it took",
-      sentence: "Every step above, timed on this laptop just now. While you were listening, Apollo already ran this whole search about once a second.",
-      figure: null,
-      settle: 3,
     },
     {
       id: "verdict",

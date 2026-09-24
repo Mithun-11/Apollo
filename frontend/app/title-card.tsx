@@ -33,10 +33,10 @@ type TitleCardProps = {
   preparing?: boolean;
   onWatch: () => void;
   onClassMode: () => void;
-  onListenAgain: () => void;
+  onHome: () => void;
 };
 
-export default function TitleCard({ recognition, waiting = false, preparing = false, onWatch, onClassMode, onListenAgain }: TitleCardProps) {
+export default function TitleCard({ recognition, waiting = false, preparing = false, onWatch, onClassMode, onHome }: TitleCardProps) {
   const matched = recognition.matched && recognition.song;
   const detail = matched ? describeMelody(recognition) ?? describeEdit(recognition) : null;
   return (
@@ -68,8 +68,8 @@ export default function TitleCard({ recognition, waiting = false, preparing = fa
           </a>
         ) : null}
         {preparing ? null : (
-          <button type="button" className="action action-quiet" onClick={onListenAgain}>
-            Listen again
+          <button type="button" className="action action-quiet" onClick={onHome}>
+            Try another song
           </button>
         )}
       </div>

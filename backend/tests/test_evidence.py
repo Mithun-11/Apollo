@@ -47,7 +47,7 @@ def test_song_files_are_found_by_title_and_versions_by_fingerprint(
     assert evidence.find_song_file("", "Heat Waves") is None
 
 
-def test_build_evidence_reports_timings_votes_and_the_song_sky(
+def test_build_evidence_reports_votes_and_the_song_sky(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     database = initialize_database(tmp_path / "apollo.db")
@@ -70,13 +70,7 @@ def test_build_evidence_reports_timings_votes_and_the_song_sky(
         built = evidence.build_evidence(query, connection, song["id"], timestamp)
     result = cast(dict[str, Any], built)
 
-    assert [item["stage"] for item in result["timings"]] == [
-        "Read audio",
-        "Spectrogram and peaks",
-        "Fingerprints",
-        "Database lookup",
-        "Offset voting",
-    ]
+    assert "timings" not in result
     assert {item["name"] for item in result["songs"]} == {"Song 1", "Song 2", "Song 3"}
     assert result["votes"][0]["songId"] == song["id"]
     assert result["speedCurve"] is None and result["melody"] is None
@@ -92,7 +86,7 @@ def test_evidence_route_passes_the_recognition_fields(monkeypatch: pytest.Monkey
     ) -> dict[str, object]:
         received.update(song_id=song_id, timestamp=timestamp, **options)
         assert path.is_file()
-        return {"timings": []}
+        return {"votes": []}
 
     monkeypatch.setattr(main, "build_evidence", fake)
     monkeypatch.setattr(main, "connect_database", io.BytesIO)

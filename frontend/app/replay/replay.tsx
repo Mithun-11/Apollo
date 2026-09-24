@@ -13,10 +13,10 @@ type ReplayProps = {
   recordingUrl: string;
   onExit: () => void;
   onClassMode: () => void;
-  onListenAgain: () => void;
+  onHome: () => void;
 };
 
-export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, onListenAgain }: ReplayProps) {
+export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, onHome }: ReplayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const worldRef = useRef<ReplayWorld | null>(null);
   const [labels, setLabels] = useState<WorldLabel[]>([]);
@@ -168,7 +168,7 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
             recognition={data.response.recognition}
             onWatch={() => go(0)}
             onClassMode={mode === "class" ? () => go(0) : onClassMode}
-            onListenAgain={onListenAgain}
+            onHome={onHome}
           />
         </div>
       ) : (
@@ -208,8 +208,6 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
           <span>{chapter.figure.unit}</span>
         </p>
       ) : null}
-
-      {chapter.id === "speed" ? <Receipt data={data} /> : null}
 
       <nav className="journey" aria-label="Replay stops">
         <ol>
@@ -308,38 +306,6 @@ function SampleLens({ samples, rate }: { samples: Float32Array; rate: number }) 
       <canvas ref={canvasRef} />
       <figcaption>
         25 milliseconds of your recording: {windowSize.toLocaleString("en-US")} numbers, one dot each
-      </figcaption>
-    </figure>
-  );
-}
-
-/** The measured time of every stage: one row each, bars to scale. */
-function Receipt({ data }: { data: ReplayData }) {
-  const timings = data.evidence?.timings ?? [];
-  if (timings.length === 0) {
-    return <p className="receipt-empty">The timing evidence is still being measured.</p>;
-  }
-  const total = timings.reduce((sum, item) => sum + item.milliseconds, 0);
-  const longest = Math.max(...timings.map((item) => item.milliseconds));
-  const format = (value: number) => (value < 10 ? value.toFixed(1) : Math.round(value).toLocaleString("en-US"));
-  return (
-    <figure className="receipt">
-      <ol className="receipt-rows" aria-label="Time spent per stage">
-        {timings.map((item, index) => (
-          <li key={item.stage} style={{ animationDelay: `${0.35 + index * 0.12}s` }}>
-            <span className="receipt-stage">
-              {item.stage}
-              <small>{item.detail}</small>
-            </span>
-            <span className="receipt-bar" aria-hidden="true">
-              <span style={{ width: `${Math.max(0.6, (item.milliseconds / longest) * 100)}%` }} />
-            </span>
-            <strong>{format(item.milliseconds)} ms</strong>
-          </li>
-        ))}
-      </ol>
-      <figcaption>
-        <strong>{total < 1000 ? `${Math.round(total)} ms` : `${(total / 1000).toFixed(2)} s`}</strong> in total, measured on this laptop just now
       </figcaption>
     </figure>
   );
