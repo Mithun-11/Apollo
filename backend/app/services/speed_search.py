@@ -15,7 +15,7 @@ core: it only runs after a query fails to match as recorded.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from .explanation import WinningFingerprintEvidence
@@ -129,14 +129,25 @@ def search_playback_speeds(
     coarse_config = replace(
         config, fan_out=settings.coarse_fan_out, match_threshold=1, min_winner_ratio=0.0
     )
+    coarse = [
+        (
+            grid_index,
+            position,
+            create_fingerprints_with_traces(rescale_peaks(peaks, change), coarse_config)[0],
+        )
+        for grid_index, grid in enumerate(grids)
+        for position, change in enumerate(grid)
+    ]
+    # One lookup for every candidate's hashes instead of one per candidate; each candidate then
+    # sees exactly the catalog fingerprints its own lookup would have returned.
+    catalog_by_hash = _index_by_hash(
+        lookup(_unique_hashes(fingerprints for _, _, fingerprints in coarse))
+    )
     scores: list[tuple[int, int, int]] = []
-    for grid_index, grid in enumerate(grids):
-        for position, change in enumerate(grid):
-            fingerprints = create_fingerprints_with_traces(
-                rescale_peaks(peaks, change), coarse_config
-            )[0]
-            result = match_fingerprints(fingerprints, lookup(fingerprints), coarse_config)
-            scores.append((result.match_count if result is not None else 0, grid_index, position))
+    for grid_index, position, fingerprints in coarse:
+        candidate_catalog = _catalog_for(fingerprints, catalog_by_hash)
+        result = match_fingerprints(fingerprints, candidate_catalog, coarse_config)
+        scores.append((result.match_count if result is not None else 0, grid_index, position))
 
     # Refined pass: the full matcher at the best candidates and their grid neighbours.
     refined: dict[PlaybackChange, None] = {}
@@ -148,14 +159,50 @@ def search_playback_speeds(
             if 0 <= neighbour < len(grid):
                 refined.setdefault(grid[neighbour], None)
 
+    candidates = [
+        (change, *create_fingerprints_with_traces(rescale_peaks(peaks, change), config))
+        for change in refined
+    ]
+    refined_by_hash = _index_by_hash(
+        lookup(_unique_hashes(fingerprints for _, fingerprints, _ in candidates))
+    )
     best: SpeedSearchMatch | None = None
-    for change in refined:
-        fingerprints, traces = create_fingerprints_with_traces(rescale_peaks(peaks, change), config)
-        catalog = lookup(fingerprints)
+    for change, fingerprints, traces in candidates:
+        catalog = _catalog_for(fingerprints, refined_by_hash)
         result = match_fingerprints(fingerprints, catalog, config)
         if result is not None and (best is None or result.match_count > best.result.match_count):
             best = SpeedSearchMatch(result, change, fingerprints, traces, catalog)
     return best
+
+
+def _unique_hashes(groups: Iterable[Sequence[Fingerprint]]) -> list[Fingerprint]:
+    """One fingerprint per distinct hash: a lookup only needs each hash once."""
+    unique: dict[str, Fingerprint] = {}
+    for fingerprints in groups:
+        for fingerprint in fingerprints:
+            unique.setdefault(fingerprint.hash_value, fingerprint)
+    return list(unique.values())
+
+
+def _index_by_hash(
+    catalog: Mapping[str, Sequence[Fingerprint]],
+) -> dict[str, list[tuple[str, Fingerprint]]]:
+    index: dict[str, list[tuple[str, Fingerprint]]] = {}
+    for song_id, fingerprints in catalog.items():
+        for fingerprint in fingerprints:
+            index.setdefault(fingerprint.hash_value, []).append((song_id, fingerprint))
+    return index
+
+
+def _catalog_for(
+    query: Sequence[Fingerprint], index: Mapping[str, Sequence[tuple[str, Fingerprint]]]
+) -> dict[str, list[Fingerprint]]:
+    """The catalog fingerprints sharing a hash with ``query``, as a lookup would return them."""
+    catalog: dict[str, list[Fingerprint]] = {}
+    for hash_value in {fingerprint.hash_value for fingerprint in query}:
+        for song_id, fingerprint in index.get(hash_value, ()):
+            catalog.setdefault(song_id, []).append(fingerprint)
+    return catalog
 
 
 def map_evidence_to_recording(

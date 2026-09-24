@@ -1,5 +1,6 @@
 from contextlib import closing
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -196,11 +197,14 @@ def test_recognize_file_matches_another_version_by_melody(
         monkeypatch.setattr(vocal_separation, "is_available", lambda: True)
         monkeypatch.setattr(vocal_separation, "separate_file", lambda path, rate: separated)
 
-        recognition = catalog.recognize_file(cover_path, connection)
+        # Live checks never run the slower melody step; the final (explained) request does.
+        assert catalog.recognize_file(cover_path, connection)["matched"] is False
+        response = catalog.recognize_file_with_explanation(cover_path, connection)
+        recognition = cast(dict[str, Any], response["recognition"])
 
         assert recognition["matched"] is True
         assert recognition["matchMethod"] == "melody"
-        assert recognition["song"]["name"] == "Song 3"  # type: ignore[index]
+        assert recognition["song"]["name"] == "Song 3"
         assert recognition["keyShiftSemitones"] == 3
 
 
@@ -224,4 +228,5 @@ def test_a_failing_melody_step_does_not_break_recognition(
     audio_path = tmp_path / "query.wav"
     sf.write(audio_path, _render(_notes(6, 40)), SAMPLE_RATE)
     with closing(connect_database(initialize_database(tmp_path / "apollo.db"))) as connection:
-        assert catalog.recognize_file(audio_path, connection)["matched"] is False
+        response = catalog.recognize_file_with_explanation(audio_path, connection)
+        assert cast(dict[str, Any], response["recognition"])["matched"] is False

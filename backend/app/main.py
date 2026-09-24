@@ -17,6 +17,7 @@ from .catalog import (
     recognize_file_with_explanation,
 )
 from .database import connect_database
+from .services import vocal_separation
 
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
@@ -25,6 +26,7 @@ CHUNK_SIZE = 1024 * 1024
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     with closing(connect_database()):
         pass
+    vocal_separation.preload_in_background()
     yield
 
 

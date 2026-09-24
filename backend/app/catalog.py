@@ -215,13 +215,10 @@ def recognize_file(
         lambda fingerprints: fetch_matching_catalog(fingerprints, connection, config),
         config,
     )
+    # Melody matching runs only in recognize_file_with_explanation (the final request): it is
+    # slower and its timestamps are too coarse for the frontend's live two-check confirmation.
     if speed_match is None:
-        melody_match = _melody_fallback(path, connection)
-        if melody_match is None:
-            return _no_match()
-        return melody_recognition_response(
-            melody_match, _fetch_song(melody_match.song_id, connection)
-        )
+        return _no_match()
     return _recognition_response(
         speed_match.result,
         len(speed_match.fingerprints),

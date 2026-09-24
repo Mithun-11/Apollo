@@ -9,6 +9,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "apollo-v3.db"
 SCHEMA_PATH = PROJECT_ROOT / "data" / "schema.sql"
+MMAP_SIZE_BYTES = 512 * 1024 * 1024
+CACHE_SIZE_KIB = 256 * 1024
 
 
 def fingerprint_hex_to_db_int(hash_hex: str) -> int:
@@ -38,6 +40,11 @@ def connect_database(path: str | Path | None = None) -> sqlite3.Connection:
         )
     connection = sqlite3.connect(resolved_path)
     _configure_connection(connection)
+    # Recognition reads thousands of scattered index pages per request. Memory-mapped reads are
+    # served straight from the OS file cache, which is much faster on Windows than SQLite's
+    # default read calls; the database file itself is unchanged.
+    connection.execute(f"PRAGMA mmap_size = {MMAP_SIZE_BYTES}")
+    connection.execute(f"PRAGMA cache_size = -{CACHE_SIZE_KIB}")
     connection.row_factory = sqlite3.Row
     return connection
 

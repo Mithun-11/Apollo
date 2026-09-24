@@ -53,6 +53,18 @@ def _load_model() -> Any:
     return _model
 
 
+def preload_in_background() -> None:
+    """Load the model on a background thread so the first melody request does not pay for it."""
+    if not is_available():
+        return
+
+    def load() -> None:
+        with _lock:
+            _load_model()
+
+    threading.Thread(target=load, name="demucs-preload", daemon=True).start()
+
+
 def separate_file(path: str | Path, sample_rate: int = 16_000) -> SeparatedAudio:
     """Separate the vocals of an audio file; raises RuntimeError when Demucs is unavailable."""
     if not is_available():
