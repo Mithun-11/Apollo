@@ -207,6 +207,16 @@ def test_recognize_file_matches_another_version_by_melody(
         assert recognition["song"]["name"] == "Song 3"
         assert recognition["keyShiftSemitones"] == 3
 
+        # After failed live checks the page asks to skip the edit search; the answer is the same.
+        def no_edit_search(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("the edit search should have been skipped")
+
+        monkeypatch.setattr(catalog, "search_playback_speeds", no_edit_search)
+        skipped = catalog.recognize_file_with_explanation(
+            cover_path, connection, skip_edit_search=True
+        )
+        assert skipped["recognition"] == recognition
+
 
 def test_melody_fallback_is_skipped_without_vocal_separation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

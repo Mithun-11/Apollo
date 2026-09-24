@@ -18,6 +18,9 @@ const CHECK_INTERVAL_SECONDS = 1;
 const TIMER_TICK_MS = 250;
 // Both checks start at the same moment in the song, so their timestamps must agree.
 const TIMESTAMP_AGREEMENT_SECONDS = 0.25;
+// If no live check has matched by then, the full answer (melody matching for covers and live
+// versions) is requested early in the background, so it is ready when listening stops.
+const EARLY_ANSWER_SECONDS = 10;
 // Use the browser's device defaults. Explicit mono/raw constraints left the built-in
 // microphone array unusable on a Windows laptop where audio: true records correctly.
 const MICROPHONE_CONSTRAINTS: MediaStreamConstraints = {
@@ -401,6 +404,11 @@ export default function Home() {
       const sampleRate = microphone.context.sampleRate;
 
       let confirmedRecognition: RecognitionResponse | null = null;
+      // Objects rather than plain variables: the timer callbacks below update them.
+      const live = { allChecksFailed: true };
+      const early: { answer: Promise<RecognitionExplanationResponse | null> | null } = {
+        answer: null,
+      };
       const recordedChunks = await new Promise<Float32Array[]>((resolve) => {
         let resolved = false;
         let checkInFlight = false;
@@ -425,6 +433,14 @@ export default function Home() {
             activeSession.finish();
             return;
           }
+          if (early.answer === null && live.allChecksFailed && elapsedSeconds >= EARLY_ANSWER_SECONDS) {
+            early.answer = recognizeAudioWithExplanation(encodeWav(chunks.current, sampleRate), true)
+              .then((response) => {
+                if (response.recognition.matched) activeSession.finish();
+                return response;
+              })
+              .catch(() => null);
+          }
           if (
             checkInFlight ||
             elapsedSeconds < FIRST_CHECK_SECONDS ||
@@ -439,6 +455,7 @@ export default function Home() {
             .then((response) => {
               if (!capturing.current || unmounted.current) return;
               const confirmed = isConfirmedMatch(previousCheck, response);
+              if (response.matched) live.allChecksFailed = false;
               const text = confirmed ? "Stable match confirmed" : response.matched ? "Possible match; checking again" : "No stable match yet";
               setCheckMessage(text);
               setChecks((current) => [...current, { seconds: elapsedSeconds, text }].slice(-4));
@@ -469,7 +486,11 @@ export default function Home() {
       setState({ phase: "processing", recognition: confirmedRecognition });
       const recording = encodeWav(recordedChunks, sampleRate);
       replacePlaybackUrl(recording);
-      const response = await recognizeAudioWithExplanation(recording);
+      // Use the early answer when it found the song; otherwise ask again with all the audio.
+      const earlyResponse = confirmedRecognition === null && early.answer ? await early.answer : null;
+      const response = earlyResponse?.recognition.matched
+        ? earlyResponse
+        : await recognizeAudioWithExplanation(recording, live.allChecksFailed);
       if (unmounted.current) return;
       setState({ phase: "complete", response });
     } catch (error) {

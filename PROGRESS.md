@@ -182,6 +182,18 @@ matches in 48 sessions of songs not in the catalog.
   recording so far** (not just the last second) to `/recognize`. It stops when two consecutive
   checks return the same song with timestamps within 0.25 s. The hard limit is 15 s. Then one
   `/recognize/explain` call on the final clip feeds the explanation UI.
+- **Fast answers for covers and no-match (2026-09-24):** live checks (`/recognize`) never run the
+  melody step. If no live check has matched by 10 s, the page sends `/recognize/explain` early in
+  the background with `liveChecksFailed=true`; when it finds the song, listening stops and that
+  answer is shown. Otherwise the final `/recognize/explain` also sends `liveChecksFailed` when no
+  live check matched, and the backend then skips the edit search the live checks already ran.
+  Routes run recognition in a worker thread, so the final request never queues behind the last
+  live check. Measured on the RTX 4060 PC (real backend, simulated page): a 15 s cover answered
+  8.2–8.5 s after listening stopped before, now at 13.2–13.3 s of listening with no wait; a song not
+  in the catalog 8.0–8.1 s after the stop before, now 3.7–4.3 s. Fingerprint and edit matches are
+  unchanged. Melody on the first 10 s finds 66 of the 79 covers that 15 s finds (41 videos, 123
+  cuts), with no wrong answers and no false matches on 24 not-in-DB cuts; the rest still get the
+  15 s request.
 - **Why the whole clip:** votes accumulate, pairs span up to 1.5 s, and every check shares the
   same start, so a real match repeats the same timestamp while a chance match does not. Server
   time per check is 0.04 s for 2 s of audio and about 0.2 s for 15 s.

@@ -72,7 +72,8 @@ def test_explain_route_returns_successful_response_and_cleans_temp_file(
 ) -> None:
     captured_paths: list[Path] = []
 
-    def recognize(path: Path, _client: object) -> dict[str, object]:
+    def recognize(path: Path, _client: object, skip_edit_search: bool) -> dict[str, object]:
+        assert skip_edit_search is False
         captured_paths.append(path)
         assert path.is_file()
         return _explanation_response(matched=True)
@@ -90,11 +91,31 @@ def test_explain_route_returns_successful_response_and_cleans_temp_file(
     assert captured_paths and not captured_paths[0].exists()
 
 
+def test_explain_route_skips_the_edit_search_after_failed_live_checks(monkeypatch: Any) -> None:
+    requested: list[bool] = []
+
+    def recognize(_path: Path, _client: object, skip_edit_search: bool) -> dict[str, object]:
+        requested.append(skip_edit_search)
+        return _explanation_response(matched=False)
+
+    monkeypatch.setattr(main, "recognize_file_with_explanation", recognize)
+    monkeypatch.setattr(main, "connect_database", io.BytesIO)
+
+    response = TestClient(main.app).post(
+        "/recognize/explain",
+        files={"audio": ("microphone.wav", b"audio", "audio/wav")},
+        data={"liveChecksFailed": "true"},
+    )
+
+    assert response.status_code == 200
+    assert requested == [True]
+
+
 def test_explain_route_returns_no_match_response(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         main,
         "recognize_file_with_explanation",
-        lambda _path, _client: _explanation_response(matched=False),
+        lambda _path, _client, **_options: _explanation_response(matched=False),
     )
     monkeypatch.setattr(main, "connect_database", io.BytesIO)
 
@@ -148,7 +169,7 @@ def test_unsupported_extension_uses_error_envelope() -> None:
 
 
 def test_invalid_audio_uses_error_envelope(monkeypatch: Any) -> None:
-    def reject(_path: Path, _client: object) -> dict[str, object]:
+    def reject(_path: Path, _client: object, **_options: object) -> dict[str, object]:
         raise ValueError("audio could not be decoded")
 
     monkeypatch.setattr(main, "recognize_file_with_explanation", reject)

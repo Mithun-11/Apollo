@@ -122,9 +122,11 @@ async function postAudio<T>(
   endpoint: string,
   audio: Blob,
   fallbackMessage: string,
+  fields: Record<string, string> = {},
 ): Promise<T> {
   const form = new FormData();
   form.append("audio", audio, "microphone.wav");
+  for (const [name, value] of Object.entries(fields)) form.append(name, value);
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), RECOGNITION_TIMEOUT_MS);
   try {
@@ -152,12 +154,15 @@ export async function recognizeAudio(audio: Blob): Promise<RecognitionResponse> 
   return postAudio<RecognitionResponse>("/backend/recognize", audio, "Recognition failed");
 }
 
+/** `liveChecksFailed`: no live check matched, so the backend skips the edit search they already ran. */
 export async function recognizeAudioWithExplanation(
   audio: Blob,
+  liveChecksFailed = false,
 ): Promise<RecognitionExplanationResponse> {
   return postAudio<RecognitionExplanationResponse>(
     "/backend/recognize/explain",
     audio,
     "Recognition explanation failed",
+    { liveChecksFailed: String(liveChecksFailed) },
   );
 }

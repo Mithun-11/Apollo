@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from .catalog import (
     SUPPORTED_AUDIO_EXTENSIONS,
@@ -88,13 +89,26 @@ async def create_song(
             path.unlink(missing_ok=True)
 
 
+def _recognize(path: Path) -> dict[str, object]:
+    with closing(connect_database()) as connection:
+        return recognize_file(path, connection)
+
+
+def _recognize_with_explanation(path: Path, skip_edit_search: bool) -> dict[str, object]:
+    with closing(connect_database()) as connection:
+        return recognize_file_with_explanation(
+            path, connection, skip_edit_search=skip_edit_search
+        )
+
+
+# Recognition runs in a worker thread, so a request never waits behind an earlier one whose
+# answer the page no longer needs (e.g. the last live check when listening stops).
 @app.post("/recognize", response_model=None)
 async def recognize(audio: Annotated[UploadFile, File()]) -> JSONResponse | dict[str, object]:
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        with closing(connect_database()) as connection:
-            return recognize_file(path, connection)
+        return await run_in_threadpool(_recognize, path)
     except ValueError as exc:
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:
@@ -107,12 +121,12 @@ async def recognize(audio: Annotated[UploadFile, File()]) -> JSONResponse | dict
 @app.post("/recognize/explain", response_model=None)
 async def recognize_with_explanation(
     audio: Annotated[UploadFile, File()],
+    live_checks_failed: Annotated[bool, Form(alias="liveChecksFailed")] = False,
 ) -> JSONResponse | dict[str, object]:
     path: Path | None = None
     try:
         path = await _save_upload(audio)
-        with closing(connect_database()) as connection:
-            return recognize_file_with_explanation(path, connection)
+        return await run_in_threadpool(_recognize_with_explanation, path, live_checks_failed)
     except ValueError as exc:
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:

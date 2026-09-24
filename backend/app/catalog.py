@@ -228,9 +228,16 @@ def recognize_file(
 
 
 def recognize_file_with_explanation(
-    path: Path, connection: sqlite3.Connection, config: SignalConfig = DEFAULT_CONFIG
+    path: Path,
+    connection: sqlite3.Connection,
+    config: SignalConfig = DEFAULT_CONFIG,
+    skip_edit_search: bool = False,
 ) -> dict[str, object]:
-    """Recognize a query and return bounded signal and matching evidence."""
+    """Recognize a query and return bounded signal and matching evidence.
+
+    ``skip_edit_search`` is for a caller whose live checks already ran the edit search on nearly
+    the same audio and found nothing; repeating it would only delay the melody step.
+    """
     analysis = analyze_query_file(path, config)
     query_duration_seconds = len(analysis.samples) / analysis.sample_rate
     query_fingerprints = analysis.fingerprints
@@ -239,7 +246,7 @@ def recognize_file_with_explanation(
     catalog = fetch_matching_catalog(query_fingerprints, connection, config)
     diagnostics = analyze_fingerprint_match(query_fingerprints, catalog, config)
     result = diagnostics.result
-    if result is None:
+    if result is None and not skip_edit_search:
         speed_match = search_playback_speeds(
             analysis.peaks,
             query_duration_seconds,
