@@ -210,6 +210,49 @@ matches in 48 sessions of songs not in the catalog.
   cursor. Each stage covers one pass through the clip; pause, seeking, stage changes, and sound-off
   stop the replay audio. This is presentation playback only and does not affect recognition.
 
+## Visual world and class mode (branch `design`, 2026-09-25)
+
+The frontend was redesigned for the classroom demo (projector, teacher who has not read the code).
+Product context is in `PRODUCT.md`; the direction contract in `.impeccable/surfaces/`.
+
+- **World:** an anime-film dusk (inspired by Studio Ghibli and *Your Name*, all original art): a
+  WebGL-painted sky with cel-banded colour and lit clouds (`app/sky/painted-sky.tsx`), a ridge,
+  utility poles and a still lake (`app/sky/horizon.tsx`). Fonts are self-hosted in `app/fonts/`
+  (Shippori Mincho B1, Zen Kaku Gothic New) so the demo works offline. One colour per meaning:
+  star white = the recording, comet teal = the catalog song, lantern amber = analysis,
+  red = threads and the verdict only.
+- **Listening:** `app/sky/live-sky.tsx` runs its own FFT on the captured samples and paints the
+  spectrogram into the sky as it is heard (time across, pitch up, 100 Hz to 5 kHz on a log axis);
+  local maxima ignite as stars; the lake shows loudness; live checks appear as beads on the
+  horizon. This only draws; recognition is unchanged.
+- **Answer:** a film title card (`app/title-card.tsx`) with the Spotify link carrying the matched
+  second as `#m:ss` (Spotify's historical start-time form; not yet confirmed on Premium).
+- **Replay (`app/replay/`):** one three.js world, the camera flying between stops. Wide stops
+  frame the 3D sky exactly where the live sky was painted, so both line up. Stops: Sound (the
+  waveform standing, a lens with 25 ms of real samples), Spectrum (the sky paints slice by slice),
+  Stars (peaks ignite; N adds noise that fogs the sky but not the stars), Fingerprints (anchor,
+  target zone, pair), Catalog (a galaxy of 27 song constellations with lookups streaming to
+  them), Speed search (edits: the vote curve spikes at the found speed), Voice (covers: the
+  singer's melody against the original, tied by the time-warping path), Alignment (the song's
+  stars fly in and tie to the recording's with red threads; offset votes as light pillars),
+  Listen (only the peaks played as sine tones), Timing (measured stage times), Answer.
+  "Watch how it was found" plays a short highlight; "Class mode" is presenter-driven
+  (arrow keys, Page Up/Down clickers, Space replays a stop, Esc leaves).
+- **Evidence endpoint:** `POST /recognize/evidence` (`backend/app/evidence.py`) is called after
+  the answer, never before it. It re-runs the fingerprint stages with timers, lists every song's
+  votes and hash hits, extracts the song's own peaks over the matched window from its file in
+  `Songs/` (matched by title; same-title versions and other-script titles by fingerprint), and
+  for edits/covers the speed curve (`score_candidate_changes`, refactored out of
+  `search_playback_speeds`, same results) and the separated melody lines. Payloads never contain
+  hash values (existing test rule).
+- **Verified:** recognition results identical to `main` on 15 noisy edits; frontend driven
+  end to end in headless Chrome with clips as a fake microphone at 1920x1080 and 1366x768.
+  Measured page flow with 27 songs: normal clip answered in about 3 s, the F1 0.89x edit
+  confirmed at 9.0 s (was 7.7 to 7.9 s with 21 songs: each edit check now takes 2.4 s instead of
+  1.9 s), a cover and a not-in-DB song answered about 4 s after the 15 s stop (the cover's early
+  10 s melody answer now sits exactly on the 1.2 gap threshold with 27 songs). Catalog growth, not
+  the redesign, caused these changes.
+
 ## Catalog workflow
 
 The song list lives in `D:\Signal Project\Song list.xlsx`, outside the repo. Its columns are Song

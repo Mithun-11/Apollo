@@ -109,6 +109,38 @@ def rescale_peaks(peaks: Sequence[Peak], change: PlaybackChange) -> tuple[Peak, 
     )
 
 
+def score_candidate_changes(
+    peaks: Sequence[Peak],
+    lookup: CatalogLookup,
+    config: SignalConfig = DEFAULT_CONFIG,
+    settings: SpeedSearchConfig = DEFAULT_SPEED_SEARCH,
+) -> list[tuple[PlaybackChange, int]]:
+    """Coarse pass: every candidate edit with its best aligned vote count, using few hashes.
+
+    Candidates come in ``candidate_changes`` order (speed edits, then pitch-only edits).
+    """
+    coarse_config = replace(
+        config, fan_out=settings.coarse_fan_out, match_threshold=1, min_winner_ratio=0.0
+    )
+    coarse = [
+        (change, create_fingerprints_with_traces(rescale_peaks(peaks, change), coarse_config)[0])
+        for grid in candidate_changes(settings)
+        for change in grid
+    ]
+    # One lookup for every candidate's hashes instead of one per candidate; each candidate then
+    # sees exactly the catalog fingerprints its own lookup would have returned.
+    catalog_by_hash = _index_by_hash(
+        lookup(_unique_hashes(fingerprints for _, fingerprints in coarse))
+    )
+    scores: list[tuple[PlaybackChange, int]] = []
+    for change, fingerprints in coarse:
+        result = match_fingerprints(
+            fingerprints, _catalog_for(fingerprints, catalog_by_hash), coarse_config
+        )
+        scores.append((change, result.match_count if result is not None else 0))
+    return scores
+
+
 def search_playback_speeds(
     peaks: Sequence[Peak],
     duration_seconds: float,
@@ -124,30 +156,12 @@ def search_playback_speeds(
     if duration_seconds < settings.min_query_seconds or not peaks:
         return None
     grids = candidate_changes(settings)
-
-    # Coarse pass: score every candidate by its best aligned vote count using few hashes.
-    coarse_config = replace(
-        config, fan_out=settings.coarse_fan_out, match_threshold=1, min_winner_ratio=0.0
-    )
-    coarse = [
-        (
-            grid_index,
-            position,
-            create_fingerprints_with_traces(rescale_peaks(peaks, change), coarse_config)[0],
-        )
+    votes = iter(score_candidate_changes(peaks, lookup, config, settings))
+    scores = [
+        (next(votes)[1], grid_index, position)
         for grid_index, grid in enumerate(grids)
-        for position, change in enumerate(grid)
+        for position in range(len(grid))
     ]
-    # One lookup for every candidate's hashes instead of one per candidate; each candidate then
-    # sees exactly the catalog fingerprints its own lookup would have returned.
-    catalog_by_hash = _index_by_hash(
-        lookup(_unique_hashes(fingerprints for _, _, fingerprints in coarse))
-    )
-    scores: list[tuple[int, int, int]] = []
-    for grid_index, position, fingerprints in coarse:
-        candidate_catalog = _catalog_for(fingerprints, catalog_by_hash)
-        result = match_fingerprints(fingerprints, candidate_catalog, coarse_config)
-        scores.append((result.match_count if result is not None else 0, grid_index, position))
 
     # Refined pass: the full matcher at the best candidates and their grid neighbours.
     refined: dict[PlaybackChange, None] = {}

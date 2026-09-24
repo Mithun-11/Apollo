@@ -18,6 +18,7 @@ from .catalog import (
     recognize_file_with_explanation,
 )
 from .database import connect_database
+from .evidence import build_evidence
 from .services import vocal_separation
 
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
@@ -131,6 +132,57 @@ async def recognize_with_explanation(
         return _error(422, "INVALID_AUDIO", str(exc))
     except Exception:
         return _error(500, "RECOGNITION_ERROR", "Unable to recognize this audio")
+    finally:
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+
+def _build_evidence(
+    path: Path,
+    song_id: str,
+    timestamp_seconds: float,
+    speed_factor: float,
+    pitch_factor: float,
+    match_method: str,
+) -> dict[str, object]:
+    with closing(connect_database()) as connection:
+        return build_evidence(
+            path,
+            connection,
+            song_id,
+            timestamp_seconds,
+            speed_factor=speed_factor,
+            pitch_factor=pitch_factor,
+            match_method=match_method,
+        )
+
+
+# Replay evidence is requested after the answer is on screen, so it never delays recognition.
+@app.post("/recognize/evidence", response_model=None)
+async def recognition_evidence(
+    audio: Annotated[UploadFile, File()],
+    song_id: Annotated[str, Form(alias="songId")],
+    timestamp_seconds: Annotated[float, Form(alias="timestampSeconds")],
+    speed_factor: Annotated[float, Form(alias="speedFactor")] = 1.0,
+    pitch_factor: Annotated[float, Form(alias="pitchFactor")] = 1.0,
+    match_method: Annotated[str, Form(alias="matchMethod")] = "fingerprint",
+) -> JSONResponse | dict[str, object]:
+    path: Path | None = None
+    try:
+        path = await _save_upload(audio)
+        return await run_in_threadpool(
+            _build_evidence,
+            path,
+            song_id,
+            timestamp_seconds,
+            speed_factor,
+            pitch_factor,
+            match_method,
+        )
+    except ValueError as exc:
+        return _error(422, "INVALID_AUDIO", str(exc))
+    except Exception:
+        return _error(500, "EVIDENCE_ERROR", "Unable to build the replay evidence")
     finally:
         if path is not None:
             path.unlink(missing_ok=True)

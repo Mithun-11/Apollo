@@ -46,3 +46,9 @@ data/*.db-*
 Thumbs.db
 .idea/
 .vscode/
+
+# Design tooling: generated screenshots, comps and decision-page logs
+.impeccable/review/
+.impeccable/questions/
+.impeccable/mocks/
+.impeccable/build/

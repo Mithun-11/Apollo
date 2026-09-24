@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchRecognitionEvidence,
   recognizeAudio,
   recognizeAudioWithExplanation,
+  type RecognitionEvidence,
   type RecognitionExplanationResponse,
   type RecognitionResponse,
 } from "../lib/api";
-import LiveWaveform from "./live-waveform";
-import RecognitionExplanation from "./recognition-explanation";
+import { type ReplayData, buildSky, decodeRecording, songStarsOnRecording } from "./replay/data";
+import Replay from "./replay/replay";
+import Horizon from "./sky/horizon";
+import LiveSky, { type LiveCheck } from "./sky/live-sky";
+import PaintedSky from "./sky/painted-sky";
+import TitleCard from "./title-card";
 
 // Listening stops as soon as two consecutive checks agree on the song and its position,
 // like Shazam; otherwise it stops at the maximum and recognizes whatever was captured.
@@ -266,6 +272,13 @@ export default function Home() {
   const lastVolumeUpdate = useRef(0);
   const unmounted = useRef(false);
   const busy = useRef(false);
+  const sampleRateRef = useRef(48_000);
+  const recordingBlobRef = useRef<Blob | null>(null);
+  const [replayMode, setReplayMode] = useState<"highlight" | "class" | null>(null);
+  const [evidence, setEvidence] = useState<RecognitionEvidence | null>(null);
+  const [decoded, setDecoded] = useState<{ samples: Float32Array; rate: number } | null>(null);
+  // Set when someone opens the replay; nothing heavy runs before that.
+  const [evidenceWanted, setEvidenceWanted] = useState(false);
 
   useEffect(() => {
     unmounted.current = false; // Reset on every (re)mount — React Strict Mode runs cleanup + remount in dev.
@@ -374,6 +387,10 @@ export default function Home() {
     }
 
     busy.current = true;
+    setReplayMode(null);
+    setEvidence(null);
+    setDecoded(null);
+    setEvidenceWanted(false);
     replacePlaybackUrl(null);
     setVolume(0);
     setChecks([]);
@@ -402,6 +419,7 @@ export default function Home() {
       setState({ phase: "recording", elapsedSeconds: 0 });
       const activeSession = session;
       const sampleRate = microphone.context.sampleRate;
+      sampleRateRef.current = sampleRate;
 
       let confirmedRecognition: RecognitionResponse | null = null;
       // Objects rather than plain variables: the timer callbacks below update them.
@@ -458,7 +476,7 @@ export default function Home() {
               if (response.matched) live.allChecksFailed = false;
               const text = confirmed ? "Stable match confirmed" : response.matched ? "Possible match; checking again" : "No stable match yet";
               setCheckMessage(text);
-              setChecks((current) => [...current, { seconds: elapsedSeconds, text }].slice(-4));
+              setChecks((current) => [...current, { seconds: elapsedSeconds, text }].slice(-40));
               if (confirmed) {
                 confirmedRecognition = response;
                 activeSession.finish();
@@ -485,6 +503,7 @@ export default function Home() {
       if (unmounted.current) return;
       setState({ phase: "processing", recognition: confirmedRecognition });
       const recording = encodeWav(recordedChunks, sampleRate);
+      recordingBlobRef.current = recording;
       replacePlaybackUrl(recording);
       // Use the early answer when it found the song; otherwise ask again with all the audio.
       const earlyResponse = confirmedRecognition === null && early.answer ? await early.answer : null;
@@ -524,126 +543,211 @@ export default function Home() {
   }
 
   const result = state.phase === "complete" ? state.response : null;
-  const recognition =
-    state.phase === "complete"
-      ? state.response.recognition
-      : state.phase === "processing"
-        ? state.recognition
-        : null;
+  const [frozen, setFrozen] = useState<ReplayData | null>(null);
+  const [pendingReplay, setPendingReplay] = useState<"highlight" | "class" | null>(null);
+
+  // Replay evidence costs seconds of backend work, so it is fetched only when the replay is
+  // opened: the answer and the song still playing in the room never compete with it.
+  useEffect(() => {
+    const blob = recordingBlobRef.current;
+    if (!evidenceWanted || !result || !blob || !playbackUrl) return;
+    let cancelled = false;
+    fetchRecognitionEvidence(blob, result.recognition)
+      .then((value) => {
+        if (!cancelled) setEvidence(value);
+      })
+      .catch((error: unknown) => console.debug("Replay evidence unavailable", error));
+    void decodeRecording(playbackUrl).then((value) => {
+      if (!cancelled) setDecoded(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [evidenceWanted, result, playbackUrl]);
+
+  const sky = useMemo(() => (result ? buildSky(result) : null), [result]);
+  const replayData = useMemo<ReplayData | null>(() => {
+    if (!result || !sky) return null;
+    const recognition = result.recognition;
+    const speedFactor = recognition.speedFactor ?? 1;
+    const pitchFactor = recognition.pitchFactor ?? 1;
+    return {
+      response: result,
+      evidence,
+      duration: result.explanation.queryDurationSeconds,
+      sampleRate: result.explanation.sampleRate,
+      ...sky,
+      samples: decoded?.samples ?? null,
+      samplesRate: decoded?.rate ?? 22_050,
+      songStars: songStarsOnRecording(evidence, speedFactor),
+      speedFactor,
+      pitchFactor,
+      matched: recognition.matched,
+      songName: recognition.song?.name ?? "",
+    };
+  }, [result, sky, evidence, decoded]);
+
+  // The journey starts once its evidence has arrived (it usually has by the time anyone clicks).
+  useEffect(() => {
+    if (!pendingReplay || !replayData) return;
+    const start = () => {
+      setFrozen(replayData);
+      setReplayMode(pendingReplay);
+      setPendingReplay(null);
+    };
+    if (evidence) {
+      start();
+      return;
+    }
+    // Covers take longest: the evidence separates the voice again. Start anyway after 12 s.
+    const timer = window.setTimeout(start, 12_000);
+    return () => window.clearTimeout(timer);
+  }, [pendingReplay, replayData, evidence]);
+
+  function openReplay(mode: "highlight" | "class") {
+    setFrozen(null);
+    setReplayMode(null);
+    setPendingReplay(mode);
+    setEvidenceWanted(true);
+  }
+
+  function closeReplay() {
+    setFrozen(null);
+    setReplayMode(null);
+    setPendingReplay(null);
+  }
+
+  function listenAgain() {
+    closeReplay();
+    void listen();
+  }
+
   const isBusy =
     state.phase === "starting-microphone" ||
     state.phase === "recording" ||
     state.phase === "processing";
+  const liveChecks: LiveCheck[] = checks.map((check) => ({
+    seconds: check.seconds,
+    kind: check.text.startsWith("Stable") ? "confirmed" : check.text.startsWith("Possible") ? "possible" : "none",
+  }));
   const status =
     state.phase === "ready"
-      ? "Ready to listen"
+      ? source === "tab"
+        ? "Play the song in another window, then share that tab."
+        : "Hold the song near the microphone."
       : state.phase === "starting-microphone"
         ? source === "tab"
-          ? "Choose the tab playing the song and turn on “Share tab audio”…"
-          : "Starting microphone…"
+          ? "Choose the tab playing the song and turn on “Share tab audio”."
+          : "Opening the microphone…"
         : state.phase === "recording"
-          ? `Listening… ${state.elapsedSeconds}s (stops automatically once the song is recognized)`
+          ? checkMessage
           : state.phase === "processing"
             ? state.recognition
-              ? "Match found · loading the explanation…"
-              : "Recognizing and explaining…"
+              ? "Found it. Preparing the answer…"
+              : "Listening is done. Searching the catalog…"
             : state.phase === "complete"
-              ? state.response.recognition.matched
-                ? "Match found"
-                : "No match found"
+              ? ""
               : state.message;
+  const replaying = frozen !== null && replayMode !== null;
+  // A confirmed live check is the answer: show it at once, while the explanation is still fetched.
+  const confirmedEarly = state.phase === "processing" && state.recognition?.matched ? state.recognition : null;
 
   return (
-    <main className="page-shell">
-      <section className="card" aria-labelledby="title">
-        <p className="eyebrow">APOLLO</p>
-        <h1 id="title">Hear the answer.<br /><span>See the signal.</span></h1>
-        <p className="subtitle">Recognize a song from your microphone or a browser tab, then explore the real waveform, frequencies, fingerprints and votes behind the match.</p>
-        <div className="source-picker" role="radiogroup" aria-label="Audio source">
-          {(["microphone", "tab"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              role="radio"
-              aria-checked={source === option}
-              className={source === option ? "source-option source-option-active" : "source-option"}
-              disabled={isBusy}
-              onClick={() => setSource(option)}
-            >
-              {option === "microphone" ? "Microphone" : "Browser tab"}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={listen}
-          disabled={isBusy}
-          className={state.phase === "recording" ? "btn-recording" : ""}
-        >
-          {state.phase === "recording"
-            ? "⏺ Recording…"
-            : source === "tab"
-              ? "🔊 Listen"
-              : "🎙 Listen"}
-        </button>
-        {state.phase === "recording" ? (
-          <button className="secondary-button" type="button" onClick={stopRecording}>
-            Stop and recognize now
+    <main className={`stage stage-${state.phase}${replaying ? " stage-replay" : ""}`}>
+      <PaintedSky
+        paused={state.phase === "starting-microphone" || state.phase === "recording" || state.phase === "processing"}
+        calm={replaying ? 1 : result || state.phase === "recording" || state.phase === "processing" ? 0.55 : 0} />
+      <LiveSky
+        chunksRef={chunks}
+        sampleRateRef={sampleRateRef}
+        recording={state.phase === "recording"}
+        durationSeconds={MAX_RECORDING_SECONDS}
+        checks={liveChecks}
+        opacity={replaying ? 0 : result ? 0.4 : 1}
+      />
+      <Horizon />
+
+      <header className="credit">
+        <p className="credit-jp" lang="ja">音の星空</p>
+        <h1 className="credit-name">Apollo</h1>
+      </header>
+
+      {replaying && frozen && replayMode && playbackUrl ? (
+        <Replay
+          key={replayMode}
+          data={frozen}
+          mode={replayMode}
+          recordingUrl={playbackUrl}
+          onExit={closeReplay}
+          onClassMode={() => openReplay("class")}
+          onListenAgain={listenAgain}
+        />
+      ) : result || confirmedEarly ? (
+        <TitleCard
+          recognition={result?.recognition ?? confirmedEarly!}
+          preparing={!result}
+          waiting={pendingReplay !== null}
+          onWatch={() => openReplay("highlight")}
+          onClassMode={() => openReplay("class")}
+          onListenAgain={listenAgain}
+        />
+      ) : (
+        <section className="console" aria-label="Listen for a song">
+          <div className="source-switch" role="radiogroup" aria-label="Where the sound comes from">
+            {(["microphone", "tab"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={source === option}
+                className="source-option"
+                disabled={isBusy}
+                onClick={() => setSource(option)}
+              >
+                <SourceIcon kind={option} />
+                {option === "microphone" ? "Microphone" : "Browser tab"}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="record"
+            onClick={state.phase === "recording" ? stopRecording : listen}
+            disabled={state.phase === "starting-microphone" || state.phase === "processing"}
+            aria-label={state.phase === "recording" ? "Stop and recognize now" : "Listen"}
+          >
+            <span className="record-ring" aria-hidden="true" />
+            <span className="record-core" aria-hidden="true" />
           </button>
-        ) : null}
-        <p className="status" aria-live="polite">{status}</p>
-        {state.phase === "recording" ? (
-          <div className="live-input">
-            <div className="live-head"><span>{source === "tab" ? "LIVE BROWSER TAB SIGNAL" : "LIVE MICROPHONE SIGNAL"}</span><strong>{state.elapsedSeconds}s / {MAX_RECORDING_SECONDS}s</strong></div>
-            <LiveWaveform samplesRef={liveSamplesRef} />
-            <div className="live-progress" role="progressbar" aria-label="Recording duration" aria-valuenow={state.elapsedSeconds} aria-valuemin={0} aria-valuemax={MAX_RECORDING_SECONDS}><span style={{ width: `${Math.min(100, state.elapsedSeconds / MAX_RECORDING_SECONDS * 100)}%` }} /></div>
-            <p className="volume-label">Input level: {Math.round(Math.min(1, volume) * 100)}% · {checkMessage}</p>
-            {checks.length > 0 && <ol className="check-list" aria-label="Recent recognition checks">{checks.map((check, index) => <li key={`${check.seconds}-${index}`}><time>{check.seconds.toFixed(1)}s</time><span>{check.text}</span></li>)}</ol>}
-          </div>
-        ) : null}
-        {playbackUrl ? (
-          <div className="playback">
-            <p className="result-label">Your local recording</p>
-            <audio controls src={playbackUrl} />
-          </div>
-        ) : null}
-
-        {recognition?.matched && recognition.song ? (
-          <div className="result" aria-live="polite">
-            <p className="result-label">
-              Found at {formatTimestamp(recognition.timestampSeconds)}
-            </p>
-            <h2>{recognition.song.name}</h2>
-            {describeEdit(recognition) ? (
-              <p className="result-label">{describeEdit(recognition)}</p>
-            ) : null}
-            <a href={recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
-              Open in Spotify
-            </a>
-          </div>
-        ) : null}
-
-        {result && playbackUrl ? <RecognitionExplanation response={result} recordingUrl={playbackUrl} /> : null}
-      </section>
+          <p className="record-label">
+            {state.phase === "recording"
+              ? `Listening · ${state.elapsedSeconds} s`
+              : state.phase === "processing"
+                ? "Searching"
+                : "Listen"}
+          </p>
+          <p className={state.phase === "error" ? "status status-error" : "status"} aria-live="polite">
+            {status}
+            {state.phase === "recording" ? <span className="status-hint"> · press again to stop early</span> : null}
+            {state.phase === "recording" && volume < 0.004 ? <span className="status-hint"> · no sound is reaching Apollo yet</span> : null}
+          </p>
+        </section>
+      )}
     </main>
   );
 }
 
-function describeEdit({ speedFactor, pitchFactor }: RecognitionResponse): string | null {
-  if (speedFactor && Math.abs(speedFactor - 1) >= 0.02) {
-    const kind = speedFactor > 1 ? "sped up" : "slowed down";
-    return `Detected edit: ${kind} (played at ${speedFactor.toFixed(2)}×)`;
-  }
-  if (pitchFactor && Math.abs(pitchFactor - 1) >= 0.02) {
-    const semitones = 12 * Math.log2(pitchFactor);
-    const kind = semitones > 0 ? "raised" : "lowered";
-    return `Detected edit: pitch ${kind} ${Math.abs(semitones).toFixed(1)} semitones`;
-  }
-  return null;
-}
-
-function formatTimestamp(seconds: number | null): string {
-  if (seconds === null) return "an unknown timestamp";
-  const total = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+function SourceIcon({ kind }: { kind: AudioSource }) {
+  return kind === "microphone" ? (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="14" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M3 9h18M6 7h.01M8.5 7h.01" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M10 13.5l2.2 1.6L15 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }

@@ -13,6 +13,10 @@ export type RecognitionResponse = {
   /** Recording speed and pitch relative to the song; both 1 unless an edit was detected. */
   speedFactor?: number | null;
   pitchFactor?: number | null;
+  /** "melody" when a cover, live version or crowd was matched by its melody. */
+  matchMethod?: "melody";
+  melodyScoreGap?: number;
+  keyShiftSemitones?: number;
 };
 
 export type WaveformEnvelopePoint = {
@@ -107,7 +111,40 @@ export type RecognitionExplanation = {
     clusteredOffsetVotes: OffsetVoteDisplay[];
   };
   candidateVotes: CandidateVote[];
+  melodyMatch: {
+    scoreGap: number;
+    keyShiftSemitones: number;
+    startSeconds: number;
+    ranking: { songName: string; score: number }[];
+  } | null;
   processingTimesMs: Record<string, number> | null;
+};
+
+/** Replay evidence, fetched after the answer so recognition never waits for it. */
+export type StageTiming = { stage: string; detail: string; milliseconds: number };
+export type CatalogSong = { songId: string; name: string; fingerprints: number; hashHits: number };
+export type SongVote = { songId: string; votes: number; offsetSeconds: number };
+export type SpeedCandidate = { speedFactor: number; pitchFactor: number; votes: number };
+export type SkyPeak = { timeSeconds: number; frequencyHz: number; amplitudeDb: number };
+export type MelodyEvidence = {
+  framesPerSecond: number;
+  query: number[];
+  queryShifted: number[];
+  song: number[];
+  path: [number, number][];
+  keyShiftSemitones: number;
+  mixSpectrogram: number[][];
+  vocalSpectrogram: number[][];
+};
+export type RecognitionEvidence = {
+  durationSeconds: number;
+  timings: StageTiming[];
+  songs: CatalogSong[];
+  votes: SongVote[];
+  catalogFingerprints: number;
+  speedCurve: SpeedCandidate[] | null;
+  songSky: { startSeconds: number; durationSeconds: number; peaks: SkyPeak[] } | null;
+  melody: MelodyEvidence | null;
 };
 
 export type RecognitionExplanationResponse = {
@@ -164,5 +201,23 @@ export async function recognizeAudioWithExplanation(
     audio,
     "Recognition explanation failed",
     { liveChecksFailed: String(liveChecksFailed) },
+  );
+}
+
+export async function fetchRecognitionEvidence(
+  audio: Blob,
+  recognition: RecognitionResponse,
+): Promise<RecognitionEvidence> {
+  return postAudio<RecognitionEvidence>(
+    "/backend/recognize/evidence",
+    audio,
+    "Replay evidence failed",
+    {
+      songId: recognition.song?.id ?? "",
+      timestampSeconds: String(recognition.timestampSeconds ?? 0),
+      speedFactor: String(recognition.speedFactor ?? 1),
+      pitchFactor: String(recognition.pitchFactor ?? 1),
+      matchMethod: recognition.matchMethod ?? "fingerprint",
+    },
   );
 }
