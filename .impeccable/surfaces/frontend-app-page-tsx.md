@@ -12,7 +12,9 @@ Scope: frontend/app (listening screen, result, post-match replay, class mode). M
 Class mode is a presenter-stepped replay (arrow keys / clicker) of every pipeline stage built
 from the recording just made. Audience: a signals class and a teacher who has not studied the
 project, on a classroom projector (1920x1080, 1366x768). Constraint: recognition speed is
-untouched; extra evidence comes from /recognize/evidence after the answer.
+untouched: the answer shows on the first confirmed live check, /recognize/evidence runs only
+when the replay is opened, and nothing heavy renders while listening (AGENTS.md, "Speed comes
+first").
 
 Brief-pinned aesthetic (user, verbatim intent): anime-film inspired like Studio Ghibli and
 Makoto Shinkai's Your Name; a masterpiece, not gradient AI slop. This pin overrides the rolled

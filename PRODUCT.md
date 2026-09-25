@@ -47,8 +47,10 @@ crowds singing (vocal separation + melody/chroma DTW), which a plain fingerprint
   Fallbacks: speed/pitch edit search (78 candidates), then melody matching (Demucs vocals, pYIN
   pitch, CENS chroma, 12-key DTW).
 - Live checks every ~1 s stop as soon as two agree; a 10 s early answer covers covers; 15 s max.
-- **Speed is non-negotiable:** visualization must never delay recognition. Extra evidence for
-  visuals is fetched or computed after the answer.
+- **Speed is non-negotiable:** visualization must never delay recognition, and must not compete
+  for the laptop's CPU/GPU while the song plays. The answer shows on the first confirmed live
+  check. Replay evidence is fetched only when the replay is opened. The sky holds still while
+  listening. Rules and time budgets: `AGENTS.md`, "Speed comes first".
 - The existing explanation API returns waveform, spectrogram, peaks, matched fingerprints,
   offset votes, candidates, counts, and melody match details.
 

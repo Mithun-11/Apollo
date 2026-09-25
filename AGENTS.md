@@ -1,5 +1,45 @@
 # Apollo agent guide
 
+## Speed comes first
+
+The answer is the product. Nothing may make it arrive later, including visuals, explanations and
+replay data. The demo runs on one laptop: the backend, this page and the song playing in another
+browser window all share its CPU and GPU. Anything heavy slows the live checks and stalls the video.
+
+- **Show the answer on the first confirmed live check.** The title card appears while the page is
+  still processing; `/recognize/explain` fills in afterwards. Never make the answer wait for
+  explanation, evidence or animation data.
+- **Heavy work runs only on request.** `/recognize/evidence`, decoding the recording and building
+  the three.js replay start when someone opens the replay, never automatically after the answer.
+  Do not add prefetching that runs while the song may still be playing.
+- **Keep the recording path light.** The painted sky holds still while listening, and the live sky
+  draws at no more than 30 fps. Don't add per-frame work, extra requests or large React re-renders
+  during recording.
+- **Keep the existing speed-ups** (see `PROGRESS.md`):
+  - early answer at 10 s;
+  - `liveChecksFailed` skips the repeated edit search;
+  - no queueing behind live checks, and requests run in the thread pool;
+  - one merged database lookup in the speed search;
+  - SQLite `mmap_size`/`cache_size` pragmas;
+  - Demucs preload;
+  - live `/recognize` skips the melody step.
+- **Time budgets:** measured 2026-09-25 with the 1920×1080 headless fake-mic harness and 25–27
+  songs. Time is from pressing Listen to the song being shown.
+
+  | Clip | Budget |
+  |------|--------|
+  | Normal clip (Heat Waves) | about 3.4 s |
+  | F1 edit, 0.89× | about 9.6 s |
+  | Cover | early answer at 10 s when the melody gap is at least 1.2; otherwise 15 s plus about 4 s |
+  | Song not in the catalog | 15 s plus about 4 s |
+
+- **Measure before and after.** Do this for any change to the recording or answer flow, to live
+  checks, or to the backend recognition path. Run the same clips in a production build
+  (`npm run build`, then `npm start`), since dev mode is slower. Report time-to-answer against these
+  budgets. A regression is a bug, and design work is no excuse for one.
+- **Catalog size costs time.** Every added song makes edit checks and melody matching slower, so
+  say so when adding songs.
+
 ## Start every task
 
 1. Inspect the relevant code, tests, and one comparable pattern before editing.
