@@ -1,36 +1,53 @@
 /**
- * The replay's 3D world: the recording's sky standing over a lake, its stars at slightly
- * different depths, the catalog as a galaxy of song-skies behind it, and a camera that flies
- * between stops. Every object is built from measured data in ReplayData.
+ * The replay's 3D world: an evening lake with hills, poles and layered clouds, the recording's
+ * spectrogram standing as the sky and then laid down as a mountain range of sound, its peaks as
+ * stars on the summits, the catalog as a galaxy above the clouds, and one camera that flies
+ * through all of it without cutting. Every data object is built from measured values.
  */
 
 import {
   AdditiveBlending,
   BoxGeometry,
+  Color,
   BufferAttribute,
   BufferGeometry,
   CanvasTexture,
-  Color,
   DoubleSide,
   Group,
-  InterleavedBufferAttribute,
-  LinearFilter,
   Mesh,
   MeshBasicMaterial,
+  NoToneMapping,
   PerspectiveCamera,
   PlaneGeometry,
-  Points,
+  SRGBColorSpace,
   Scene,
   ShaderMaterial,
-  SRGBColorSpace,
   Vector3,
   WebGLRenderer,
 } from "three";
-import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
-import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
-import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { MAX_FREQUENCY_HZ, MIN_FREQUENCY_HZ, clamp01, easeInOut, easeOut } from "../sky/geometry";
 import type { ReplayData } from "./data";
+import { CameraRig, type Pose } from "./world/camera";
+import { Lake, REFLECTED_LAYER, reflect } from "./world/lake";
+import { SUN_DIRECTION, Scenery } from "./world/scenery";
+import {
+  COLORS,
+  FIELD_BASE,
+  FIELD_DEPTH,
+  FIELD_WIDTH,
+  type SharedUniforms,
+  StarField,
+  Strokes,
+  TERRAIN_HEIGHT,
+  hash,
+  sharedUniforms,
+  starSprite,
+} from "./world/shared";
+import type { Cue } from "./world/audio";
+import { Curtain, GlowVolume, Meteors, Shatter } from "./world/effects";
+import { Rain } from "./world/rain";
+import { Post, type PostFrame } from "./world/post";
+import { SoundField } from "./world/terrain";
 
 export type ChapterId =
   | "sound"
@@ -54,360 +71,154 @@ export type WorldLabel = {
   visible: boolean;
 };
 
-const SKY_WIDTH = 16;
-const SKY_HEIGHT = 7;
-const SKY_BASE = 0.2;
-const COLORS = {
-  star: new Color("#fff6e6"),
-  comet: new Color("#9fe3e0"),
-  thread: new Color("#e2323f"),
-  lantern: new Color("#ffc98a"),
-  dim: new Color("#8f86b8"),
-};
 const MAX_THREADS = 140;
+const STAR_LIFT = 0.14;
+/** The galaxy of catalog songs hangs above the clouds. */
+const GALAXY_CENTER = new Vector3(0, 92, -130);
 
-type Shot = { position: Vector3; target: Vector3 };
+/** The moment, in seconds into the Alignment beat, when the song's stars lock onto the recording's. */
+const LOCK_AT = 6.4;
+const DEBRIS_PER_PILLAR = 26;
 
-// At this distance and height the sky plane (y 0.2 to 7.2) spans 70% to 12% of the screen height
-// and 75% of its width, exactly where the painted horizon and the live sky place it.
-const WIDE_DISTANCE = 15.6;
-const WIDE_HEIGHT = 2.6;
+/** Where the wide opening shot stands: it frames the standing sky exactly as the live sky. */
+const WIDE: Pose = { position: new Vector3(0, 2.6, 15.6), target: new Vector3(0, 2.6, 0) };
 
-// ---------------------------------------------------------------------------------------------
-// Small builders
-// ---------------------------------------------------------------------------------------------
-
-const POINT_VERTEX = /* glsl */ `
-attribute float aSize;
-attribute float aAlpha;
-attribute vec3 aColor;
-varying float vAlpha;
-varying vec3 vColor;
-uniform float uScale;
-void main() {
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mv;
-  gl_PointSize = aSize * uScale / max(0.2, -mv.z);
-  vAlpha = aAlpha;
-  vColor = aColor;
-}`;
-
-const POINT_FRAGMENT = /* glsl */ `
-uniform sampler2D uSprite;
-varying float vAlpha;
-varying vec3 vColor;
-void main() {
-  vec4 texel = texture2D(uSprite, gl_PointCoord);
-  gl_FragColor = vec4(vColor * texel.rgb, texel.a * vAlpha);
-}`;
-
-function starSprite(): CanvasTexture {
-  const size = 128;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const context = canvas.getContext("2d");
-  if (context) {
-    const middle = size / 2;
-    const halo = context.createRadialGradient(middle, middle, 0, middle, middle, middle);
-    halo.addColorStop(0, "rgba(255,255,255,1)");
-    halo.addColorStop(0.1, "rgba(255,255,255,0.95)");
-    halo.addColorStop(0.28, "rgba(255,255,255,0.28)");
-    halo.addColorStop(1, "rgba(255,255,255,0)");
-    context.fillStyle = halo;
-    context.fillRect(0, 0, size, size);
-    context.globalCompositeOperation = "lighter";
-    for (const horizontal of [true, false]) {
-      const spike = horizontal
-        ? context.createLinearGradient(0, middle, size, middle)
-        : context.createLinearGradient(middle, 0, middle, size);
-      spike.addColorStop(0, "rgba(255,255,255,0)");
-      spike.addColorStop(0.5, "rgba(255,255,255,0.9)");
-      spike.addColorStop(1, "rgba(255,255,255,0)");
-      context.fillStyle = spike;
-      if (horizontal) context.fillRect(0, middle - 1.2, size, 2.4);
-      else context.fillRect(middle - 1.2, 0, 2.4, size);
-    }
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
+/** A point in the laid-down field's frame, expressed in the world (tilt = 1). */
+function laid(local: Vector3): Vector3 {
+  return new Vector3(local.x, FIELD_BASE + local.z, -local.y);
 }
 
-class StarField {
-  readonly object: Points;
-  private readonly positions: Float32Array;
-  private readonly alphas: Float32Array;
-  private readonly sizes: Float32Array;
-  private readonly colors: Float32Array;
-  readonly count: number;
-
-  constructor(count: number, sprite: CanvasTexture, scale: number) {
-    this.count = count;
-    this.positions = new Float32Array(count * 3);
-    this.alphas = new Float32Array(count);
-    this.sizes = new Float32Array(count);
-    this.colors = new Float32Array(count * 3);
-    const geometry = new BufferGeometry();
-    geometry.setAttribute("position", new BufferAttribute(this.positions, 3));
-    geometry.setAttribute("aAlpha", new BufferAttribute(this.alphas, 1));
-    geometry.setAttribute("aSize", new BufferAttribute(this.sizes, 1));
-    geometry.setAttribute("aColor", new BufferAttribute(this.colors, 3));
-    const material = new ShaderMaterial({
-      vertexShader: POINT_VERTEX,
-      fragmentShader: POINT_FRAGMENT,
-      uniforms: { uSprite: { value: sprite }, uScale: { value: scale } },
-      transparent: true,
-      depthWrite: false,
-      blending: AdditiveBlending,
-    });
-    this.object = new Points(geometry, material);
-    this.object.frustumCulled = false;
-  }
-
-  set(index: number, position: Vector3 | [number, number, number], size: number, color: Color, alpha: number) {
-    const [x, y, z] = Array.isArray(position) ? position : [position.x, position.y, position.z];
-    this.positions.set([x, y, z], index * 3);
-    this.sizes[index] = size;
-    this.colors.set([color.r, color.g, color.b], index * 3);
-    this.alphas[index] = alpha;
-  }
-
-  alpha(index: number, value: number) {
-    this.alphas[index] = value;
-  }
-
-  size(index: number, value: number) {
-    this.sizes[index] = value;
-  }
-
-  move(index: number, x: number, y: number, z: number) {
-    this.positions[index * 3] = x;
-    this.positions[index * 3 + 1] = y;
-    this.positions[index * 3 + 2] = z;
-  }
-
-  position(index: number): Vector3 {
-    return new Vector3(this.positions[index * 3], this.positions[index * 3 + 1], this.positions[index * 3 + 2]);
-  }
-
-  commit(positions = false) {
-    const geometry = this.object.geometry;
-    (geometry.getAttribute("aAlpha") as BufferAttribute).needsUpdate = true;
-    (geometry.getAttribute("aSize") as BufferAttribute).needsUpdate = true;
-    if (positions) (geometry.getAttribute("position") as BufferAttribute).needsUpdate = true;
-  }
-
-  dispose() {
-    this.object.geometry.dispose();
-    (this.object.material as ShaderMaterial).dispose();
-  }
-}
-
-class Strokes {
-  readonly object: LineSegments2;
-  readonly material: LineMaterial;
-  private readonly geometry: LineSegmentsGeometry;
-  private readonly buffer: Float32Array;
-  private readonly capacity: number;
-
-  constructor(color: Color, width: number, opacity = 1, capacity = 64) {
-    this.capacity = capacity;
-    this.buffer = new Float32Array(capacity * 6);
-    this.geometry = new LineSegmentsGeometry();
-    this.geometry.setPositions(this.buffer);
-    this.material = new LineMaterial({
-      color: color.getHex(),
-      linewidth: width,
-      transparent: true,
-      opacity,
-      depthWrite: false,
-    });
-    this.object = new LineSegments2(this.geometry, this.material);
-    this.object.frustumCulled = false;
-    this.set([]);
-  }
-
-  /** Flat list of segment endpoints: x1,y1,z1,x2,y2,z2 per segment. */
-  set(segments: number[]) {
-    const count = Math.min(this.capacity, Math.floor(segments.length / 6));
-    this.buffer.set(count * 6 === segments.length ? segments : segments.slice(0, count * 6));
-    this.geometry.instanceCount = count;
-    (this.geometry.getAttribute("instanceStart") as InterleavedBufferAttribute).data.needsUpdate = true;
-  }
-
-  dispose() {
-    this.geometry.dispose();
-    this.material.dispose();
-  }
-}
-
-function pushCurve(out: number[], from: Vector3, to: Vector3, sag: number, steps = 8) {
-  let previous = from.clone();
+/** An arc between two points of the field, rising along its loudness axis (local z). */
+function arc(out: number[], from: Vector3, to: Vector3, height: number, steps = 8) {
+  let px = from.x;
+  let py = from.y;
+  let pz = from.z;
   for (let step = 1; step <= steps; step += 1) {
     const t = step / steps;
-    const point = from.clone().lerp(to, t);
-    point.y -= Math.sin(Math.PI * t) * sag;
-    out.push(previous.x, previous.y, previous.z, point.x, point.y, point.z);
-    previous = point;
+    const x = from.x + (to.x - from.x) * t;
+    const y = from.y + (to.y - from.y) * t;
+    const z = from.z + (to.z - from.z) * t + Math.sin(Math.PI * t) * height;
+    out.push(px, py, pz, x, y, z);
+    px = x;
+    py = y;
+    pz = z;
   }
 }
-
-/** A soft-edged mask so glow planes fade out instead of ending in a straight line. */
-function featherTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 64;
-  const context = canvas.getContext("2d");
-  if (context) {
-    const horizontal = context.createLinearGradient(0, 0, 128, 0);
-    horizontal.addColorStop(0, "#000");
-    horizontal.addColorStop(0.08, "#fff");
-    horizontal.addColorStop(0.92, "#fff");
-    horizontal.addColorStop(1, "#000");
-    context.fillStyle = horizontal;
-    context.fillRect(0, 0, 128, 64);
-    context.globalCompositeOperation = "multiply";
-    const vertical = context.createLinearGradient(0, 0, 0, 64);
-    vertical.addColorStop(0, "#000");
-    vertical.addColorStop(0.12, "#fff");
-    vertical.addColorStop(1, "#fff");
-    context.fillStyle = vertical;
-    context.fillRect(0, 0, 128, 64);
-  }
-  return new CanvasTexture(canvas);
-}
-
-function hash(index: number): number {
-  const value = Math.sin(index * 127.1 + 311.7) * 43758.5453;
-  return value - Math.floor(value);
-}
-
-// ---------------------------------------------------------------------------------------------
-// The world
-// ---------------------------------------------------------------------------------------------
 
 export class ReplayWorld {
   private readonly renderer: WebGLRenderer;
   private readonly scene = new Scene();
-  private readonly camera = new PerspectiveCamera(42, 16 / 9, 0.1, 400);
+  private readonly camera = new PerspectiveCamera(42, 16 / 9, 0.1, 1200);
+  private readonly shared: SharedUniforms = sharedUniforms();
   private readonly sprite = starSprite();
   private readonly data: ReplayData;
   private readonly reducedMotion: boolean;
+  private readonly highlight: boolean;
+  private readonly rig: CameraRig;
+  private readonly scenery: Scenery;
+  private readonly lake: Lake;
+  private readonly field: SoundField;
 
   private chapter: ChapterId = "sound";
   private chapterStarted = 0;
-  private flight: { from: Shot; started: number; duration: number } | null = null;
-  private readonly look = { position: new Vector3(0, 1.4, 9), target: new Vector3(0, 1, 0) };
   private noise = false;
   private noiseLevel = 0;
   private listenStarted: number | null = null;
+  private tilt = 0;
+  private sceneSeen = false;
+  private pairFocus = new Vector3();
 
-  // Recording sky
-  private readonly skyMaterial: ShaderMaterial;
-  private readonly glowMaterial: MeshBasicMaterial;
-  private readonly beam: Mesh;
+  // The recording
   private readonly stars: StarField;
   private readonly starTimes: number[];
-  private readonly starOrder: number[];
   private readonly waveform: Mesh;
   private readonly waveformMaterial: MeshBasicMaterial;
-  private readonly noisePlane: Mesh;
-  private readonly noiseTexture: CanvasTexture;
-  private readonly noiseCanvas: HTMLCanvasElement;
+  private readonly shatter: Shatter;
+  private readonly shatterEnd: number;
   // Fingerprints
-  private readonly pairStrokes = new Strokes(COLORS.lantern, 3.4, 1, 8);
-  private readonly zoneStrokes = new Strokes(COLORS.lantern, 2.4, 0.85, 16);
-  private readonly webStrokes = new Strokes(COLORS.lantern, 1.2, 0.22, 240);
+  private readonly zoneVolume = new GlowVolume(COLORS.lantern);
+  private readonly pulse: StarField;
+  private readonly pairStrokes = new Strokes(COLORS.lantern, 3.4, 1, 16);
+  private readonly zoneStrokes = new Strokes(COLORS.lantern, 2.2, 0.9, 24);
+  private readonly webStrokes = new Strokes(COLORS.lantern, 1.2, 0.22, 1800);
   // Catalog
   private readonly galaxy = new Group();
-  private readonly clusters: { songId: string; name: string; center: Vector3; field: StarField; hits: number; seeds: number[] }[] = [];
-  private readonly streaks: StarField;
-  private readonly streakPaths: { from: Vector3; to: Vector3; delay: number }[] = [];
-  // Song sky and musubi
+  private readonly clusterField: StarField;
+  private readonly clusters: { songId: string; name: string; center: Vector3; hits: number; seeds: number[] }[] = [];
+  private readonly meteors: Meteors;
+  // Song and alignment
   private readonly songGroup = new Group();
   private readonly songStars: StarField;
-  private readonly threads = new Strokes(COLORS.thread, 3.2, 1, MAX_THREADS * 6 + 12);
+  private readonly threads = new Strokes(COLORS.thread, 3.2, 1, MAX_THREADS * 8 + 16);
   private readonly knots: StarField;
   private readonly threadPairs: { query: Vector3; song: Vector3 }[] = [];
   private readonly pillars = new Group();
   private readonly pillarMeshes: { mesh: Mesh; height: number; winning: boolean }[] = [];
+  // The lock: debris from the false pillars, the shockwave, and the film effects of the impact.
+  private readonly debris: StarField;
+  private readonly debrisVelocity: Float32Array;
+  private readonly debrisHome: { x: number; z: number; height: number }[] = [];
+  private debrisStarted = -1;
+  private lockKicked = false;
+  private lockPlayed = false;
+  private readonly onLock: (() => void) | undefined;
+  private readonly onCue: ((cue: Cue) => void) | undefined;
+  /** Cues already played in this beat, so each fires once per visit. */
+  private readonly fired = new Set<string>();
+  // The noise storm.
+  private readonly rain = new Rain(3500, -30, 30, -26, 12, 20, new Color("#b9c9ec"));
+  private nextBolt = 0;
+  private boltAt = -10;
+  private shock: { x: number; z: number; radius: number; strength: number } | null = null;
+  private readonly post: Post | null = null;
+  private postBlend = 0;
+  private readonly fx: PostFrame = { bloom: 1, focus: null, flash: 0, chroma: 0 };
+  private lastFrame = 0;
   // Edits and covers
   private readonly curveStrokes = new Strokes(COLORS.comet, 2.6, 1, 96);
   private readonly curveCursor = new Strokes(COLORS.lantern, 2, 1, 4);
+  private readonly curveCurtain = new Curtain(COLORS.comet, 128);
+  private readonly queryCurtain = new Curtain(COLORS.lantern, 700);
+  private readonly songCurtain = new Curtain(COLORS.comet, 1300);
   private readonly voiceGroup = new Group();
   private mixPlane: Mesh | null = null;
   private vocalPlane: Mesh | null = null;
-  private readonly contourQuery = new Strokes(COLORS.lantern, 3, 1, 600);
-  private readonly contourSong = new Strokes(COLORS.comet, 3, 1, 1200);
+  private readonly contourQuery = new Strokes(COLORS.lantern, 5, 1, 600);
+  private readonly contourSong = new Strokes(COLORS.comet, 5, 1, 1200);
   private readonly dtwThreads = new Strokes(COLORS.thread, 1.6, 0.8, 300);
 
-  constructor(canvas: HTMLCanvasElement, data: ReplayData, reducedMotion: boolean) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    data: ReplayData,
+    options: { reducedMotion: boolean; highlight: boolean; onLock?: () => void; onCue?: (cue: Cue) => void },
+  ) {
     this.data = data;
-    this.reducedMotion = reducedMotion;
+    this.onLock = options.onLock;
+    this.onCue = options.onCue;
+    this.reducedMotion = options.reducedMotion;
+    this.highlight = options.highlight;
+    this.rig = new CameraRig(options.reducedMotion);
     this.renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
     this.renderer.setClearColor(0x000000, 0);
-    this.camera.position.copy(this.look.position);
-    this.camera.lookAt(this.look.target);
+    this.renderer.toneMapping = NoToneMapping;
+    this.camera.layers.enable(REFLECTED_LAYER);
+    this.camera.position.copy(WIDE.position);
+    this.camera.lookAt(WIDE.target);
 
-    // --- The recording's sky: a painted plane with a soft glow plane behind it.
-    const skyTexture = new CanvasTexture(data.sky);
-    skyTexture.minFilter = LinearFilter;
-    skyTexture.colorSpace = SRGBColorSpace;
-    this.skyMaterial = new ShaderMaterial({
-      uniforms: {
-        uMap: { value: skyTexture },
-        uReveal: { value: 0 },
-        uOpacity: { value: 0 },
-      },
-      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `uniform sampler2D uMap; uniform float uReveal; uniform float uOpacity; varying vec2 vUv;
-        void main(){ vec4 c = texture2D(uMap, vUv); float edge = smoothstep(uReveal, uReveal - 0.012, vUv.x);
-        float feather = smoothstep(0.0, 0.035, vUv.x) * smoothstep(1.0, 0.965, vUv.x) * smoothstep(1.0, 0.94, vUv.y);
-        gl_FragColor = vec4(c.rgb, c.a * edge * feather * uOpacity); }`,
-      transparent: true,
-      depthWrite: false,
-      blending: AdditiveBlending,
-      side: DoubleSide,
+    // --- The evening: sky dome, land, poles, clouds and the lake.
+    this.scenery = new Scenery(this.shared);
+    this.scene.add(this.scenery.group);
+    this.scenery.group.children.forEach((child) => {
+      if (child !== this.scenery.cloudGroup) reflect(child);
     });
-    const skyPlane = new Mesh(new PlaneGeometry(SKY_WIDTH, SKY_HEIGHT), this.skyMaterial);
-    skyPlane.position.set(0, SKY_BASE + SKY_HEIGHT / 2, 0);
-    this.scene.add(skyPlane);
-    const glowTexture = new CanvasTexture(data.skyGlow);
-    glowTexture.colorSpace = SRGBColorSpace;
-    this.glowMaterial = new MeshBasicMaterial({
-      map: glowTexture,
-      alphaMap: featherTexture(),
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: AdditiveBlending,
-    });
-    const glowPlane = new Mesh(new PlaneGeometry(SKY_WIDTH * 1.02, SKY_HEIGHT * 1.04), this.glowMaterial);
-    glowPlane.position.set(0, SKY_BASE + SKY_HEIGHT / 2, -0.35);
-    this.scene.add(glowPlane);
+    this.lake = new Lake(this.shared, canvas.clientWidth || 1280, canvas.clientHeight || 720);
+    this.scene.add(this.lake.mesh);
 
-    // The spectrum beam: the analysis window sweeping through time.
-    this.beam = new Mesh(
-      new PlaneGeometry(0.08, SKY_HEIGHT),
-      new MeshBasicMaterial({ color: COLORS.lantern, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false }),
-    );
-    this.beam.position.set(0, SKY_BASE + SKY_HEIGHT / 2, 0.05);
-    this.scene.add(this.beam);
+    // --- The recording's sound field: the sky that becomes a mountain range.
+    this.field = new SoundField(this.shared, data.columnLevels, data.duration);
+    this.scene.add(this.field.group);
 
-    // Fog of noise for the robustness demonstration.
-    this.noiseCanvas = document.createElement("canvas");
-    this.noiseCanvas.width = 256;
-    this.noiseCanvas.height = 112;
-    this.noiseTexture = new CanvasTexture(this.noiseCanvas);
-    this.noisePlane = new Mesh(
-      new PlaneGeometry(SKY_WIDTH, SKY_HEIGHT),
-      new MeshBasicMaterial({ map: this.noiseTexture, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false }),
-    );
-    this.noisePlane.position.set(0, SKY_BASE + SKY_HEIGHT / 2, 0.12);
-    this.scene.add(this.noisePlane);
-
-    // --- Stars: every peak the server kept, louder ones slightly nearer.
+    // Stars: every peak the server kept, standing on the summit under it.
     const peaks = data.response.explanation.peaks;
     const loudest = Math.max(...peaks.map((peak) => peak.amplitudeDb), -1);
     const quietest = Math.min(...peaks.map((peak) => peak.amplitudeDb), loudest - 1);
@@ -415,20 +226,26 @@ export class ReplayWorld {
     this.starTimes = peaks.map((peak) => peak.timeSeconds);
     peaks.forEach((peak, index) => {
       const level = (peak.amplitudeDb - quietest) / Math.max(1, loudest - quietest);
-      const depth = (hash(index) - 0.5) * 1.4 + level * 0.6;
-      this.stars.set(index, [this.x(peak.timeSeconds), this.y(peak.frequencyHz), depth], 0.9 + level * 1.5, COLORS.star, 0);
+      this.stars.set(
+        index,
+        [this.field.x(peak.timeSeconds), this.field.y(peak.frequencyHz), STAR_LIFT],
+        0.9 + level * 1.5,
+        COLORS.star,
+        0,
+        this.field.level(peak.timeSeconds, peak.frequencyHz),
+      );
     });
-    this.starOrder = peaks.map((_, index) => index).sort((a, b) => this.starTimes[a] - this.starTimes[b]);
-    this.scene.add(this.stars.object);
+    this.field.group.add(this.stars.object);
+    reflect(this.stars.object);
 
-    // --- The waveform as a ribbon lying on the lake, growing toward the viewer.
+    // The waveform: a ribbon of real samples standing in the sky, curving in depth.
     const envelope = data.response.explanation.waveformEnvelope;
     const ribbon = new BufferGeometry();
     const vertices = new Float32Array(Math.max(1, envelope.length) * 6);
     envelope.forEach((point, index) => {
-      const x = this.x(point.timeSeconds);
-      // Built standing (x = time, y = amplitude); the spectrum stop lays it down onto the lake.
-      vertices.set([x, point.maximum * 1.8, 0, x, point.minimum * 1.8, 0], index * 6);
+      const x = this.field.x(point.timeSeconds);
+      const z = Math.sin(x * 0.45) * 0.7;
+      vertices.set([x, point.maximum * 1.8, z, x, point.minimum * 1.8, z], index * 6);
     });
     const indices: number[] = [];
     for (let index = 0; index < envelope.length - 1; index += 1) {
@@ -448,69 +265,104 @@ export class ReplayWorld {
     this.waveform = new Mesh(ribbon, this.waveformMaterial);
     this.scene.add(this.waveform);
 
-    // --- Fingerprint strokes.
-    this.scene.add(this.pairStrokes.object, this.zoneStrokes.object, this.webStrokes.object);
+    // The shatter: sparks leave the wave and land in the sky at their own moment, just as the
+    // analysis beam reaches it (class mode), or all at once when the highlight opens.
+    const paintStart = this.highlight ? 0.1 : 0.8;
+    const paintFor = this.highlight ? 1.2 : 5;
+    this.shatterEnd = paintStart + paintFor + 1;
+    const sparks: { from: Vector3; to: Vector3; launch: number }[] = [];
+    const levels = data.columnLevels;
+    const rows = levels[0]?.length ?? 0;
+    if (envelope.length > 1 && rows > 0) {
+      for (let index = 0; index < 2600; index += 1) {
+        const point = envelope[Math.floor(hash(index * 1.31) * envelope.length)];
+        const x = this.field.x(point.timeSeconds);
+        const amplitude = point.minimum + (point.maximum - point.minimum) * hash(index * 2.77);
+        const from = new Vector3(x, FIELD_BASE + FIELD_DEPTH * 0.3 + amplitude * 1.8, 1.2 + Math.sin(x * 0.45) * 0.7);
+        // Land where this moment is loudest: the best of a few sampled pitches.
+        const column = levels[Math.min(levels.length - 1, Math.floor((point.timeSeconds / Math.max(data.duration, 0.001)) * levels.length))];
+        let best = 0;
+        for (let pick = 0; pick < 6; pick += 1) {
+          const row = Math.floor(hash(index * 7.1 + pick * 3.3) * rows);
+          if (column[row] > column[best]) best = row;
+        }
+        const to = new Vector3(x, FIELD_BASE + (1 - best / Math.max(1, rows - 1)) * FIELD_DEPTH, 0.02);
+        const fraction = point.timeSeconds / Math.max(data.duration, 0.001);
+        sparks.push({ from, to, launch: paintStart + fraction * paintFor - 0.5 });
+      }
+    }
+    this.shatter = new Shatter(sparks, this.sprite, COLORS.star);
+    this.scene.add(this.shatter.object);
 
-    // --- The catalog galaxy: one constellation per song, sized by its fingerprints.
+    // Fingerprint strokes live on the field, so they tilt with it.
+    this.pulse = new StarField(1, this.sprite, 260);
+    this.pulse.set(0, [0, 0, 0], 2.6, COLORS.lantern, 0);
+    this.field.group.add(this.pairStrokes.object, this.zoneStrokes.object, this.webStrokes.object, this.zoneVolume.object, this.pulse.object);
+
+    // --- The catalog: one constellation per song, high above the clouds.
     const songs = data.evidence?.songs ?? [];
+    const winnerId = data.response.recognition.song?.id;
     const maxPrints = Math.max(1, ...songs.map((song) => song.fingerprints));
     const clusterPoints = songs.map((song) => Math.round(40 + 110 * Math.log10(1 + song.fingerprints) / Math.log10(1 + maxPrints)));
-    const totalPoints = clusterPoints.reduce((sum, value) => sum + value, 0);
-    const clusterField = new StarField(Math.max(1, totalPoints), this.sprite, 520);
+    this.clusterField = new StarField(clusterPoints.reduce((sum, value) => sum + value, 0), this.sprite, 900);
     let cursor = 0;
     songs.forEach((song, index) => {
       const angle = index * 2.39996 + 0.6;
-      const radius = 11 + index * 0.95;
-      const center = new Vector3(Math.cos(angle) * radius, 3 + Math.sin(index * 1.7) * 4, -30 + Math.sin(angle) * radius * 0.7);
+      const radius = 22 + index * 2.6;
+      const center = new Vector3(
+        GALAXY_CENTER.x + Math.cos(angle) * radius * 1.7,
+        GALAXY_CENTER.y + Math.sin(index * 1.7) * 12,
+        GALAXY_CENTER.z + Math.sin(angle) * radius,
+      );
       const seeds: number[] = [];
       for (let point = 0; point < clusterPoints[index]; point += 1) {
-        const spread = 1.6;
-        const offset = new Vector3(
-          (hash(cursor * 3.1) - 0.5) * spread * 2,
-          (hash(cursor * 5.7) - 0.5) * spread,
-          (hash(cursor * 9.3) - 0.5) * spread * 2,
-        );
-        const winner = song.songId === data.response.recognition.song?.id;
-        clusterField.set(cursor, center.clone().add(offset), 0.8 + hash(cursor) * 1.4, winner ? COLORS.comet : COLORS.star, 0);
+        const offset = new Vector3((hash(cursor * 3.1) - 0.5) * 12, (hash(cursor * 5.7) - 0.5) * 6, (hash(cursor * 9.3) - 0.5) * 12);
+        this.clusterField.set(cursor, center.clone().add(offset), 0.9 + hash(cursor) * 1.5, song.songId === winnerId ? COLORS.comet : COLORS.star, 0);
         seeds.push(cursor);
         cursor += 1;
       }
-      this.clusters.push({ songId: song.songId, name: song.name, center, field: clusterField, hits: song.hashHits, seeds });
+      this.clusters.push({ songId: song.songId, name: song.name, center, hits: song.hashHits, seeds });
     });
-    this.galaxy.add(clusterField.object);
+    this.galaxy.add(this.clusterField.object);
     this.scene.add(this.galaxy);
 
-    // Shooting stars: one per lookup hit, capped, split by how many hits each song received.
+    // Lookups: a meteor storm, one streak per sampled hit, from the recording's stars to a song.
     const totalHits = songs.reduce((sum, song) => sum + song.hashHits, 0);
-    const budget = Math.min(420, totalHits);
-    this.streaks = new StarField(Math.max(1, budget), this.sprite, 420);
+    const budget = Math.min(1600, totalHits);
+    const streakPaths: { from: Vector3; to: Vector3; delay: number }[] = [];
     let streak = 0;
     for (const cluster of this.clusters) {
       const share = totalHits > 0 ? Math.round((cluster.hits / totalHits) * budget) : 0;
       for (let item = 0; item < share && streak < budget; item += 1) {
-        const origin = this.stars.count > 0 ? this.stars.position(Math.floor(hash(streak * 7.7) * this.stars.count)) : new Vector3();
-        this.streakPaths.push({ from: origin, to: cluster.center, delay: hash(streak * 3.3) * 4.2 });
-        this.streaks.set(streak, origin, 1.1, COLORS.lantern, 0);
+        const star = Math.floor(hash(streak * 7.7) * this.stars.count);
+        const origin = this.stars.count > 0
+          ? laid(new Vector3(this.stars.x(star), this.stars.y(star), STAR_LIFT + this.stars.lift(star) * TERRAIN_HEIGHT))
+          : new Vector3();
+        streakPaths.push({ from: origin, to: cluster.center, delay: hash(streak * 3.3) * 4.5 });
         streak += 1;
       }
     }
-    this.scene.add(this.streaks.object);
+    this.meteors = new Meteors(streakPaths, COLORS.lantern);
+    this.scene.add(this.meteors.object);
 
-    // --- The song's own sky, which will slide onto the recording's.
+    // --- The song's own stars, which descend and slide onto the recording's.
     const songPeaks = data.songStars;
-    this.songStars = new StarField(Math.max(1, songPeaks.length), this.sprite, 200);
+    this.songStars = new StarField(songPeaks.length, this.sprite, 200);
     songPeaks.forEach((peak, index) => {
       const level = clamp01((peak.amplitudeDb + 60) / 60);
+      const hz = peak.frequencyHz * data.pitchFactor;
       this.songStars.set(
         index,
-        [this.x(peak.timeSeconds), this.y(peak.frequencyHz * data.pitchFactor), (hash(index + 99) - 0.5) * 1.2],
+        [this.field.x(peak.timeSeconds), this.field.y(hz), STAR_LIFT + 0.05],
         0.8 + level * 1.3,
         COLORS.comet,
         0,
+        this.field.level(peak.timeSeconds, hz),
       );
     });
     this.songGroup.add(this.songStars.object);
-    this.scene.add(this.songGroup);
+    this.field.group.add(this.songGroup);
+    reflect(this.songStars.object);
 
     // Threads: each matched fingerprint ties a recording star to its twin in the song.
     const songStart = data.evidence?.songSky?.startSeconds ?? data.response.recognition.timestampSeconds ?? 0;
@@ -520,75 +372,86 @@ export class ReplayWorld {
       const fingerprint = matched[index];
       const queryTime = fingerprint.queryAnchorSeconds;
       const songTime = (fingerprint.sourceAnchorSeconds - songStart) / Math.max(data.speedFactor, 0.01);
+      const level = this.field.level(queryTime, fingerprint.anchorFrequencyHz);
       this.threadPairs.push({
-        query: new Vector3(this.x(queryTime), this.y(fingerprint.anchorFrequencyHz), 0),
-        song: new Vector3(this.x(songTime), this.y(fingerprint.anchorFrequencyHz), 0),
+        query: new Vector3(this.field.x(queryTime), this.field.y(fingerprint.anchorFrequencyHz), STAR_LIFT + level * TERRAIN_HEIGHT),
+        song: new Vector3(this.field.x(songTime), this.field.y(fingerprint.anchorFrequencyHz), STAR_LIFT + level * TERRAIN_HEIGHT),
       });
     }
-    this.knots = new StarField(Math.max(1, this.threadPairs.length), this.sprite, 200);
+    this.knots = new StarField(this.threadPairs.length, this.sprite, 200);
     this.threadPairs.forEach((pair, index) => this.knots.set(index, pair.query, 2.2, COLORS.thread, 0));
-    this.scene.add(this.threads.object, this.knots.object);
+    this.field.group.add(this.threads.object, this.knots.object);
+    reflect(this.threads.object);
+    reflect(this.knots.object);
 
-    // Offset votes as pillars of light standing on the lake.
-    const allVotes = data.response.explanation.decision.clusteredOffsetVotes;
-    const votes = [...allVotes].sort((a, b) => b.count - a.count).slice(0, 48);
+    // Offset votes: pillars of light standing in the lake in front of the mountains.
+    const votes = [...data.response.explanation.decision.clusteredOffsetVotes].sort((a, b) => b.count - a.count).slice(0, 48);
     if (votes.length > 0) {
       const leading = Math.max(...votes.map((vote) => vote.count));
       const first = Math.min(...votes.map((vote) => vote.offsetSeconds));
       const last = Math.max(...votes.map((vote) => vote.offsetSeconds));
       for (const vote of votes) {
-        const height = Math.max(0.06, (vote.count / leading) * 4.4);
-        const color = vote.winning ? COLORS.thread : COLORS.star;
-        // A column of light: bright at the lake, fading toward its top.
+        const height = Math.max(0.06, (vote.count / leading) * 5);
         const material = new ShaderMaterial({
-          uniforms: { uColor: { value: color }, uOpacity: { value: 0 } },
+          uniforms: { uColor: { value: vote.winning ? COLORS.thread : COLORS.star }, uOpacity: { value: 0 } },
           vertexShader: "varying float vH; void main(){ vH = position.y + 0.5; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
-          fragmentShader: "uniform vec3 uColor; uniform float uOpacity; varying float vH; void main(){ gl_FragColor = vec4(uColor, uOpacity * (1.0 - vH * 0.85)); }",
+          fragmentShader: "uniform vec3 uColor; uniform float uOpacity; varying float vH; void main(){ gl_FragColor = vec4(uColor, uOpacity * (1.0 - vH * 0.85));\n#include <colorspace_fragment>\n}",
           transparent: true,
           depthWrite: false,
           blending: AdditiveBlending,
         });
-        const mesh = new Mesh(new BoxGeometry(vote.winning ? 0.12 : 0.035, 1, vote.winning ? 0.12 : 0.035), material);
+        const mesh = new Mesh(new BoxGeometry(vote.winning ? 0.16 : 0.05, 1, vote.winning ? 0.16 : 0.05), material);
         const position = last > first ? (vote.offsetSeconds - first) / (last - first) : 0.5;
-        mesh.position.set(-SKY_WIDTH * 0.42 + position * SKY_WIDTH * 0.84, 0, 0.25);
+        // Behind the mountains, so they rise above the ridges and double in the water.
+        mesh.position.set(-FIELD_WIDTH * 0.42 + position * FIELD_WIDTH * 0.84, 0, -FIELD_DEPTH - 1.2);
         mesh.scale.y = 0.001;
         this.pillars.add(mesh);
         this.pillarMeshes.push({ mesh, height, winning: vote.winning });
       }
     }
     this.scene.add(this.pillars);
+    reflect(this.pillars);
 
-    // Edits: the speed/pitch search curve lies on the lake.
-    this.scene.add(this.curveStrokes.object, this.curveCursor.object);
+    // Debris: each false pillar breaks into sparks that fall into the lake at the lock.
+    const falsePillars = this.pillarMeshes.filter((pillar) => !pillar.winning);
+    this.debris = new StarField(falsePillars.length * DEBRIS_PER_PILLAR, this.sprite, 200);
+    this.debrisVelocity = new Float32Array(Math.max(1, this.debris.count * 3));
+    falsePillars.forEach((pillar) => {
+      for (let piece = 0; piece < DEBRIS_PER_PILLAR; piece += 1) {
+        this.debrisHome.push({ x: pillar.mesh.position.x, z: pillar.mesh.position.z, height: pillar.height });
+      }
+    });
+    this.scene.add(this.debris.object);
+    reflect(this.debris.object);
+    this.scene.add(this.rain.object);
 
-    // Covers: the separated voice and the two melody lines.
+    // Edits: the speed/pitch search curve stands in the lake.
+    this.scene.add(this.curveStrokes.object, this.curveCursor.object, this.curveCurtain.object);
+    reflect(this.curveCurtain.object);
+    reflect(this.curveStrokes.object);
+
+    // Covers: the separated voice and the two melody lines, standing before the mountains.
     const melody = data.evidence?.melody;
     if (melody) {
-      const mix = this.imagePlane(melody.mixSpectrogram, [180, 150, 220]);
+      const mix = this.imagePlane(melody.mixSpectrogram, [150, 165, 220]);
       const vocal = this.imagePlane(melody.vocalSpectrogram, [255, 205, 150]);
-      mix.position.set(0, SKY_BASE + SKY_HEIGHT * 0.35, -0.4);
-      vocal.position.set(0, SKY_BASE + SKY_HEIGHT * 0.35, -0.2);
+      mix.position.set(0, FIELD_BASE + FIELD_DEPTH * 0.35, 0.8);
+      vocal.position.set(0, FIELD_BASE + FIELD_DEPTH * 0.35, 1.0);
       this.voiceGroup.add(mix, vocal);
       this.mixPlane = mix;
       this.vocalPlane = vocal;
     }
-    this.voiceGroup.add(this.contourQuery.object, this.contourSong.object, this.dtwThreads.object);
+    this.voiceGroup.add(this.contourQuery.object, this.contourSong.object, this.dtwThreads.object, this.queryCurtain.object, this.songCurtain.object);
     this.scene.add(this.voiceGroup);
 
+    try {
+      this.post = new Post(this.renderer, this.scene, this.camera, this.reducedMotion);
+    } catch {
+      this.post = null; // Without post-processing the world still renders, just without glow.
+    }
     this.resize();
-  }
-
-  // --- Coordinates -----------------------------------------------------------------------------
-
-  private x(seconds: number): number {
-    return -SKY_WIDTH / 2 + (SKY_WIDTH * seconds) / Math.max(this.data.duration, 0.001);
-  }
-
-  private y(hz: number): number {
-    const low = Math.log(MIN_FREQUENCY_HZ);
-    const high = Math.log(MAX_FREQUENCY_HZ);
-    const clamped = Math.min(MAX_FREQUENCY_HZ, Math.max(MIN_FREQUENCY_HZ, hz));
-    return SKY_BASE + (SKY_HEIGHT * (Math.log(clamped) - low)) / (high - low);
+    // Compile every shader now, during "Preparing the replay…", so the first frames never stall.
+    this.renderer.compile(this.scene, this.camera);
   }
 
   private imagePlane(values: number[][], tint: [number, number, number]): Mesh {
@@ -608,77 +471,141 @@ export class ReplayWorld {
       }
       context.putImageData(image, 0, 0);
     }
-    const texture = new CanvasTexture(canvas);
+    // Drawn up four times larger with a soft blur, so the data reads as painted light, not pixels.
+    const soft = document.createElement("canvas");
+    soft.width = canvas.width * 4;
+    soft.height = canvas.height * 4;
+    const softContext = soft.getContext("2d");
+    if (softContext) {
+      softContext.imageSmoothingEnabled = true;
+      softContext.filter = "blur(3px)";
+      softContext.drawImage(canvas, 0, 0, soft.width, soft.height);
+    }
+    const texture = new CanvasTexture(soft);
     texture.colorSpace = SRGBColorSpace;
     return new Mesh(
-      new PlaneGeometry(SKY_WIDTH, SKY_HEIGHT * 0.62),
+      new PlaneGeometry(FIELD_WIDTH, FIELD_DEPTH * 0.62),
       new MeshBasicMaterial({ map: texture, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false }),
     );
   }
 
-  // --- Camera stops ---------------------------------------------------------------------------
+  /** A point on the field (its own frame) above a moment and a pitch, riding the terrain. */
+  private fieldPoint(seconds: number, hz: number, above = STAR_LIFT): Vector3 {
+    return new Vector3(this.field.x(seconds), this.field.y(hz), above + this.field.level(seconds, hz) * TERRAIN_HEIGHT * this.field.grow);
+  }
 
-  private shot(chapter: ChapterId, local: number): Shot {
-    const drift = this.reducedMotion ? 0 : Math.sin(local * 0.25) * 0.25;
-    const shot = (position: [number, number, number], target: [number, number, number]): Shot => ({
+  private toWorld(local: Vector3): Vector3 {
+    return this.field.group.localToWorld(local.clone());
+  }
+
+  // --- Camera poses --------------------------------------------------------------------------
+
+  /** Where each beat wants the camera, at `t` seconds into the beat. */
+  private pose(chapter: ChapterId, t: number): Pose {
+    const at = (position: [number, number, number], target: [number, number, number]): Pose => ({
       position: new Vector3(...position),
       target: new Vector3(...target),
     });
-    const wide = shot([drift, WIDE_HEIGHT, WIDE_DISTANCE], [drift, WIDE_HEIGHT, 0]);
+    const calm = this.reducedMotion ? 0 : 1;
     switch (chapter) {
       case "sound":
-      case "spectrum":
-      case "musubi":
-      case "listen":
-      case "warp":
-      case "voice":
-      case "verdict":
-        return wide;
+        return at([0, 2.6, 15.6 - Math.min(t, 12) * 0.18 * calm], [0, 2.6, 0]);
+      case "spectrum": {
+        // Face-on while the beam paints, then a crane up and around as the sky lies down.
+        const lay = easeInOut((this.tilt - 0.05) / 0.95);
+        // Centred and a little raised: the whole field in frame, the evening horizon behind it.
+        const pose = at([0, 2.6 + 1.4 * lay, 15.6 - 2.4 * lay], [0, 2.6 - 1.6 * lay, -3.5 * lay]);
+        return pose;
+      }
       case "stars": {
-        // Drift slowly through the sky, close enough for the stars to part as we pass.
-        const pan = this.reducedMotion ? 0 : Math.sin(local * 0.12) * 2.2;
-        return shot([pan - 1, 3.3, 10.5], [pan - 0.6, 3.1, 0]);
+        // A low sweep along the time axis, just above the summits: stars pass by the lens.
+        // The highlight shows this beat for a few seconds, so it starts mid-sweep where stars are.
+        const start = this.highlight ? 0.35 : 0;
+        const sweep = this.reducedMotion ? 0.3 : start + (1 - start) * (0.5 - 0.5 * Math.cos((t / 26) * Math.PI));
+        const x = -10.5 + sweep * 15;
+        return at([x * 0.6, 2.4, 6.5], [x * 0.6 + 2.5, 0.8, -3.5]);
       }
       case "fingerprint": {
-        const pair = this.currentPair(local);
-        const anchor = pair ? new Vector3(this.x(pair.anchorSeconds), this.y(pair.anchorFrequencyHz), 0) : new Vector3(0, 3.5, 0);
-        const focus = anchor.clone().add(new Vector3(0.9, 0, 0));
-        return { position: focus.clone().add(new Vector3(drift * 0.4, -0.4, 6.4)), target: focus.clone().add(new Vector3(0, -0.9, 0)) };
+        const focus = this.pairFocus;
+        return {
+          position: focus.clone().add(new Vector3(2.2 + Math.sin(t * 0.2) * 0.3 * calm, 1.5, 6.4)),
+          target: focus.clone().add(new Vector3(1.4, 0.2, -1.4)),
+        };
       }
       case "catalog":
-        return shot([drift * 6, 10, 60 - Math.min(local, 12) * 0.9], [0, 2.5, -22]);
-      case "listen":
-        return wide;
+        return at([0, 80, 40 - Math.min(t, 14) * 0.8 * calm], [0, 90, -130]);
+      case "warp":
+        return at([0, 7.8, 11.5 - Math.min(t, 10) * 0.12 * calm], [0, 1.2, -3.2]);
+      case "voice":
+        return at([0, 4.2, 18.5 - Math.min(t, 14) * 0.1 * calm], [0, 3.9, -0.5]);
+      case "musubi": {
+        // A slow push-in through the slide, then a hard punch forward on the lock and a drift back.
+        const since = t - LOCK_AT;
+        const punch = since < 0 ? 0 : since < 0.35 ? easeOut(since / 0.35) : 1 - 0.75 * easeInOut((since - 0.35) / 2.4);
+        const push = Math.min(t, LOCK_AT) * 0.28;
+        return at([0.8, 4.6 - punch * 0.6 * calm, 11.5 - (push + punch * 2.6) * calm], [0, 2.2 + punch * 0.4, -5]);
+      }
+      case "listen": {
+        const angle = -0.5 + t * 0.1 * calm;
+        return at([Math.sin(angle) * 12, 4.6, -3.5 + Math.cos(angle) * 12], [0, 1.2, -3.5]);
+      }
+      case "verdict":
+        return at([0, 9, 24 + Math.min(t, 16) * 0.5 * calm], [0, 5, -20]);
     }
   }
 
-  private currentPair(local: number) {
-    const pairs = this.data.response.explanation.pairExamples;
-    if (pairs.length === 0) return null;
-    return pairs[Math.min(pairs.length - 1, Math.floor(local / 3.2)) % pairs.length];
-  }
-
-  listenTime(): number {
-    if (this.listenStarted === null) return 0;
-    return Math.min(this.data.duration, (performance.now() - this.listenStarted) / 1000);
+  /**
+   * Every pose is composed for a 16:9 screen. On a narrower window the camera eases back along
+   * its line of sight, so the same things stay in frame instead of being cropped at the sides.
+   */
+  private fit(pose: Pose): Pose {
+    const aspect = this.camera.aspect;
+    if (aspect >= 1.7) return pose;
+    const back = Math.pow(1.7 / Math.max(aspect, 0.6), 0.85);
+    return { position: pose.target.clone().add(pose.position.clone().sub(pose.target).multiplyScalar(back)), target: pose.target };
   }
 
   // --- Public controls -----------------------------------------------------------------------
 
   goTo(chapter: ChapterId) {
-    this.flight = {
-      from: { position: this.camera.position.clone(), target: this.look.target.clone() },
-      started: performance.now(),
-      duration: this.reducedMotion ? 1 : chapter === "catalog" || this.chapter === "catalog" ? 3200 : 2300,
-    };
+    const now = performance.now();
+    this.resetLock();
+    const first = this.chapterStarted === 0;
     this.chapter = chapter;
-    this.chapterStarted = performance.now();
+    this.chapterStarted = now;
     this.listenStarted = null;
+    this.fired.clear();
+    if (!first) {
+      this.rig.flyTo(this.fit(this.pose(chapter, 2.5)), now);
+      this.onCue?.("whoosh");
+    }
   }
 
   replayChapter() {
     this.chapterStarted = performance.now();
+    this.fired.clear();
+    this.resetLock();
     if (this.chapter === "listen") this.listenStarted = performance.now();
+  }
+
+  private resetLock() {
+    this.debrisStarted = -1;
+    this.lockKicked = false;
+    this.lockPlayed = false;
+    this.shock = null;
+    for (let index = 0; index < 4; index += 1) this.lake.ring(index, 0, 0, 0, 0);
+  }
+
+  /** Play a cue once per visit to a beat. */
+  private cue(cue: Cue, key: string = cue) {
+    if (this.fired.has(key)) return;
+    this.fired.add(key);
+    this.onCue?.(cue);
+  }
+
+  /** The storm's strength, 0 to 1, for the rain sound. */
+  stormLevel(): number {
+    return this.noiseLevel;
   }
 
   setNoise(on: boolean) {
@@ -689,12 +616,18 @@ export class ReplayWorld {
     this.listenStarted = performance.now();
   }
 
+  listenTime(): number {
+    if (this.listenStarted === null) return 0;
+    return Math.min(this.data.duration, (performance.now() - this.listenStarted) / 1000);
+  }
+
   resize() {
     const canvas = this.renderer.domElement;
     const width = canvas.clientWidth || 1;
     const height = canvas.clientHeight || 1;
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     this.renderer.setSize(width, height, false);
+    this.post?.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     for (const strokes of [this.pairStrokes, this.zoneStrokes, this.webStrokes, this.threads, this.curveStrokes, this.curveCursor, this.contourQuery, this.contourSong, this.dtwThreads]) {
@@ -707,29 +640,44 @@ export class ReplayWorld {
   frame(now: number): WorldLabel[] {
     const local = (now - this.chapterStarted) / 1000;
     const labels: WorldLabel[] = [];
+    this.shared.uTime.value = now / 1000;
     this.animateChapter(local, labels);
+    this.scene.updateMatrixWorld();
 
-    // Camera: fly to the stop, then follow it.
-    const wanted = this.shot(this.chapter, Math.max(0, local));
-    if (this.flight) {
-      const progress = clamp01((now - this.flight.started) / this.flight.duration);
-      const eased = easeInOut(progress);
-      // Rise a little in the middle of long flights, like a crane move.
-      const lift = Math.sin(Math.PI * eased) * (this.flight.duration > 3000 ? 6 : 1.2);
-      this.camera.position.lerpVectors(this.flight.from.position, wanted.position, eased);
-      this.camera.position.y += lift;
-      this.look.target.lerpVectors(this.flight.from.target, wanted.target, eased);
-      if (progress >= 1) this.flight = null;
+    const delta = this.lastFrame > 0 ? Math.min(0.05, (now - this.lastFrame) / 1000) : 0;
+    this.lastFrame = now;
+    this.updateDebris(delta);
+    this.rig.update(this.camera, this.fit(this.pose(this.chapter, Math.max(0, local))), now);
+    this.scenery.update(this.camera, now / 1000, this.noiseLevel * 4, this.shock);
+    // The film look joins once the 3D world is fully in (before that the canvas is see-through
+    // over the painted sky, which post-processing would not preserve).
+    if (this.post && this.shared.uScene.value > 0.97) {
+      this.postBlend = Math.min(1, this.postBlend + delta * 1.5);
+      this.post.render(now, { ...this.fx, bloom: this.fx.bloom * this.postBlend });
     } else {
-      this.camera.position.lerp(wanted.position, 0.05);
-      this.look.target.lerp(wanted.target, 0.05);
+      this.postBlend = 0;
+      this.renderer.render(this.scene, this.camera);
     }
-    this.camera.lookAt(this.look.target);
-    this.renderer.render(this.scene, this.camera);
 
     const width = this.renderer.domElement.clientWidth;
     const height = this.renderer.domElement.clientHeight;
-    return labels.map((label) => ({ ...label, x: label.x * width, y: label.y * height }));
+    // Labels stay on screen: a label near an edge slides inward rather than being cut off.
+    return this.declutter(labels).map((label) => ({
+      ...label,
+      x: Math.min(0.8, Math.max(0.02, label.x)) * width,
+      y: Math.min(0.72, Math.max(0.08, label.y)) * height,
+    }));
+  }
+
+  /** Drop labels that would overlap one placed before them (earlier labels have priority). */
+  private declutter(labels: WorldLabel[]): WorldLabel[] {
+    const placed: WorldLabel[] = [];
+    for (const label of labels) {
+      if (!label.visible) continue;
+      const clash = placed.some((other) => Math.abs(other.x - label.x) < 0.13 && Math.abs(other.y - label.y) < 0.07);
+      if (!clash) placed.push(label);
+    }
+    return placed;
   }
 
   private project(point: Vector3): { x: number; y: number; visible: boolean } {
@@ -737,7 +685,7 @@ export class ReplayWorld {
     return {
       x: (projected.x + 1) / 2,
       y: (1 - projected.y) / 2,
-      visible: projected.z < 1 && Math.abs(projected.x) < 1.1 && Math.abs(projected.y) < 1.1,
+      visible: projected.z < 1 && Math.abs(projected.x) < 1.05 && Math.abs(projected.y) < 1.05,
     };
   }
 
@@ -746,167 +694,244 @@ export class ReplayWorld {
     const t = this.reducedMotion ? 1e3 : local;
     const data = this.data;
 
-    // Defaults each frame: what each stop shows is decided below.
-    let skyOpacity = 0;
-    let reveal = 1;
+    // --- The field's pose: standing sky, the drawbridge, or laid mountains.
+    let tiltTarget = 1;
+    let fieldOpacity = 1;
+    let reveal = 1.01;
+    let beam = 0;
+    let night = 0.55;
     let starLevel = 0;
     let revealStarsUntil = data.duration;
     let waveform = 0;
-    let beam = 0;
     let galaxy = 0;
     let song = 0;
-    let threads = 0;
-    let pillars = 0;
     let voice = 0;
 
     switch (chapter) {
       case "sound":
-        waveform = 0.85 * easeOut(t / 2.5);
+        tiltTarget = 0;
+        night = 0.35;
+        fieldOpacity = 1 - 0.8 * easeOut((t - 0.8) / 1.6);
+        waveform = 0.85 * easeOut((t - 0.8) / 2.5);
         break;
       case "spectrum": {
-        reveal = clamp01((t - 0.8) / 7);
-        skyOpacity = 1;
-        beam = reveal > 0 && reveal < 1 ? 0.8 : 0;
-        waveform = 0.3;
-        this.beam.position.x = -SKY_WIDTH / 2 + SKY_WIDTH * reveal;
+        night = 0.4;
+        // The highlight opens on the finished picture; class mode paints it with the beam first.
+        const paintFor = this.highlight ? 0 : 5;
+        const paintStart = this.highlight ? 0 : 0.8;
+        reveal = paintFor > 0 ? clamp01((t - paintStart) / paintFor) : 1.01;
+        beam = reveal > 0 && reveal < 1 ? 0.9 : 0;
+        const layAt = this.highlight ? 1.4 : 6.4;
+        tiltTarget = this.reducedMotion ? 1 : easeInOut((t - layAt) / 3);
+        waveform = 0.85 * (1 - tiltTarget);
+        starLevel = tiltTarget > 0.6 ? easeOut((tiltTarget - 0.6) / 0.4) : 0;
+        revealStarsUntil = data.duration * clamp01((tiltTarget - 0.6) / 0.4);
         break;
       }
       case "stars":
-        skyOpacity = 1 - 0.72 * easeOut(t / 2);
         starLevel = 1;
-        revealStarsUntil = data.duration * clamp01((t - 0.6) / 4.5);
+        night = 0.6 + 0.25 * this.noiseLevel;
+        revealStarsUntil = data.duration * clamp01((t - 0.4) / 4.5);
         break;
       case "fingerprint":
-        skyOpacity = 0.3;
-        starLevel = 0.55;
+        starLevel = 0.6;
+        night = 0.62;
         break;
       case "catalog":
-        skyOpacity = 0.35;
         starLevel = 0.8;
+        night = 0.75;
         galaxy = easeOut(t / 2.5);
         break;
       case "musubi":
-        skyOpacity = 0.25;
         starLevel = 0.85;
+        night = 0.68;
         song = easeOut(t / 1.8);
-        threads = clamp01((t - 1) / 1.5);
-        pillars = clamp01((t - 8.8) / 1.2);
         galaxy = Math.max(0, 1 - t / 1.5) * 0.6;
         break;
       case "warp":
-        skyOpacity = 0.15;
         starLevel = 1;
+        night = 0.62;
         song = 1;
         break;
       case "voice":
-        skyOpacity = 0.05;
         starLevel = 0.15;
+        night = 0.62;
+        fieldOpacity = 0.55;
         voice = 1;
         break;
       case "listen":
-        skyOpacity = 0.35;
         starLevel = 0.5;
+        night = 0.58;
         break;
       case "verdict":
-        skyOpacity = 0.5;
         starLevel = 0.9;
+        night = 0.5;
         break;
     }
 
-    // Sky paint and glow ease toward their targets.
-    const sky = this.skyMaterial.uniforms;
-    sky.uOpacity.value += (skyOpacity - sky.uOpacity.value) * 0.08;
-    sky.uReveal.value = chapter === "spectrum" ? reveal : chapter === "sound" ? 0 : 1.02;
-    this.glowMaterial.opacity += (skyOpacity * 0.7 - this.glowMaterial.opacity) * 0.08;
-    const beamMaterial = this.beam.material as MeshBasicMaterial;
-    beamMaterial.opacity += (beam - beamMaterial.opacity) * 0.2;
+    // Tilt eases toward its target; the drawbridge itself is driven directly so it stays exact.
+    this.tilt = chapter === "spectrum" ? tiltTarget : this.tilt + (tiltTarget - this.tilt) * 0.06;
+    const grow = this.tilt;
+    this.field.pose(this.tilt, grow);
+    this.field.lightFrom(SUN_DIRECTION.clone().negate().setY(0.7).normalize());
+    this.field.reveal(reveal);
+    this.field.beamAt(Math.min(1, reveal), beam);
+    const opacity = this.field.material.uniforms.uOpacity.value as number;
+    this.field.opacity(opacity + (fieldOpacity - opacity) * 0.08);
+    const liftScale = TERRAIN_HEIGHT * grow;
+    for (const field of [this.stars, this.songStars, this.knots]) field.material.uniforms.uLiftScale.value = liftScale;
+
+    // The 3D evening fades in as the sky lies down, and stays once it has been seen.
+    if (this.tilt > 0.95) this.sceneSeen = true;
+    const sceneTarget = this.sceneSeen ? 1 : clamp01((this.tilt - 0.05) / 0.6);
+    this.shared.uScene.value += (sceneTarget - this.shared.uScene.value) * 0.08;
+    this.shared.uNight.value += (night - this.shared.uNight.value) * 0.03;
+
+    // --- Waveform: standing in the sky for "sound", lying on the lake as the spectrum builds.
     this.waveformMaterial.opacity += (waveform - this.waveformMaterial.opacity) * 0.08;
-    // Standing as a wave in the sky for "sound"; lying on the lake from "spectrum" on.
-    const lay = chapter === "sound" ? 0 : chapter === "spectrum" ? easeInOut(t / 1.8) : 1;
-    this.waveform.rotation.x = (-Math.PI / 2) * lay;
-    this.waveform.position.set(0, SKY_BASE + SKY_HEIGHT * 0.3 * (1 - lay) + 0.02 * lay, 1.3 * lay);
-    this.waveform.geometry.setDrawRange(0, chapter === "sound" ? Math.floor(clamp01(t / 3.5) * (this.waveform.geometry.index?.count ?? 0) / 6) * 6 : Infinity);
+    this.waveform.rotation.x = 0;
+    this.waveform.position.set(0, FIELD_BASE + FIELD_DEPTH * 0.3, 1.2);
+    this.waveform.visible = chapter === "sound" || chapter === "spectrum";
+    const drawn = this.waveform.geometry.index?.count ?? 0;
+    if (chapter === "sound") {
+      this.waveform.geometry.setDrawRange(0, Math.floor((clamp01((t - 0.8) / 3.5) * drawn) / 6) * 6);
+    } else {
+      // The part of the wave the beam has passed has already flown into the sky.
+      const consumed = this.highlight ? clamp01((t - 0.1) / 1.2) : clamp01((t - 0.8) / 5);
+      const start = Math.floor((consumed * drawn) / 6) * 6;
+      this.waveform.geometry.setDrawRange(start, Math.max(0, drawn - start));
+    }
+    this.shatter.update(t, chapter === "spectrum" && t < this.shatterEnd ? 1 : 0);
 
-    // Noise fog: a live, shimmering haze that brightens everything except the peaks.
-    const noiseMaterial = this.noisePlane.material as MeshBasicMaterial;
-    this.noiseLevel += ((chapter === "stars" && this.noise ? 1 : 0) - this.noiseLevel) * 0.08;
-    noiseMaterial.opacity = this.noiseLevel * 0.55;
-    if (this.noiseLevel > 0.01) this.paintNoise();
+    // --- Noise: the ground turns jagged and hazy; the peaks do not move.
+    this.noiseLevel += ((chapter === "stars" && this.noise ? 1 : 0) - this.noiseLevel) * 0.06;
+    this.field.noise(this.noiseLevel);
 
-    // Stars.
-    for (const index of this.starOrder) {
+    // --- Stars.
+    const peaks = data.response.explanation.peaks;
+    for (let index = 0; index < peaks.length; index += 1) {
       const appear = this.starTimes[index] <= revealStarsUntil ? 1 : 0;
-      const matched = data.response.explanation.peaks[index].matched;
       const glow = chapter === "listen" ? this.listenGlow(index) : 0;
-      const musubiTint = chapter === "musubi" && matched ? 1 : 0;
-      this.stars.alpha(index, starLevel * appear * (musubiTint ? 1 : chapter === "musubi" ? 0.45 : 1) + glow);
+      const tint = chapter === "musubi" ? (peaks[index].matched ? 1 : 0.4) : 1;
+      // Through the storm the peaks burn brighter still: noise does not move them.
+      const storm = chapter === "stars" ? 1 + 0.6 * this.noiseLevel : 1;
+      this.stars.alpha(index, starLevel * appear * tint * storm + glow);
     }
     this.stars.commit();
 
-    // Fingerprint chapter: an anchor, its target zone, and the pair it makes.
-    if (chapter === "fingerprint") {
-      const pair = this.currentPair(t);
-      if (pair) {
-        const anchor = new Vector3(this.x(pair.anchorSeconds), this.y(pair.anchorFrequencyHz), 0.02);
-        const target = new Vector3(this.x(pair.targetSeconds), this.y(pair.targetFrequencyHz), 0.02);
-        const config = data.response.explanation.signalConfig;
-        const frameSeconds = config.hopLength / data.sampleRate;
-        const binHz = data.sampleRate / config.fftSize;
-        const zoneLeft = this.x(pair.anchorSeconds + frameSeconds);
-        const zoneRight = this.x(pair.anchorSeconds + 64 * frameSeconds);
-        const zoneTop = this.y(pair.anchorFrequencyHz + 150 * binHz);
-        const zoneBottom = this.y(Math.max(MIN_FREQUENCY_HZ, pair.anchorFrequencyHz - 150 * binHz));
-        const zoneReveal = easeOut(((t % 3.2) - 0.2) / 0.8);
-        const right = zoneLeft + (zoneRight - zoneLeft) * zoneReveal;
-        const armX = (right - zoneLeft) * 0.18;
-        const armY = (zoneTop - zoneBottom) * 0.22;
-        this.zoneStrokes.set(zoneReveal <= 0 ? [] : [
-          zoneLeft, zoneBottom, 0, zoneLeft + armX, zoneBottom, 0, zoneLeft, zoneBottom, 0, zoneLeft, zoneBottom + armY, 0,
-          zoneLeft, zoneTop, 0, zoneLeft + armX, zoneTop, 0, zoneLeft, zoneTop, 0, zoneLeft, zoneTop - armY, 0,
-          right, zoneBottom, 0, right - armX, zoneBottom, 0, right, zoneBottom, 0, right, zoneBottom + armY, 0,
-          right, zoneTop, 0, right - armX, zoneTop, 0, right, zoneTop, 0, right, zoneTop - armY, 0,
-        ]);
-        const draw = easeOut(((t % 3.2) - 0.9) / 0.9);
-        this.pairStrokes.set(draw > 0 ? [anchor.x, anchor.y, anchor.z, anchor.x + (target.x - anchor.x) * draw, anchor.y + (target.y - anchor.y) * draw, 0.02] : []);
-        const screen = this.project(anchor);
-        labels.push({
-          id: "hash",
-          text: `${Math.round(pair.anchorFrequencyHz)} Hz → ${Math.round(pair.targetFrequencyHz)} Hz, ${(pair.deltaFrames * frameSeconds).toFixed(2)} s apart`,
-          detail: "hashed together into one 64-bit fingerprint",
-          tone: "lantern",
-          x: screen.x,
-          y: screen.y,
-          visible: screen.visible && draw > 0.6,
-        });
-      }
-      const web: number[] = [];
-      if (t > 3) {
-        for (const fingerprint of data.response.explanation.matchedFingerprints.slice(0, 220)) {
-          web.push(
-            this.x(fingerprint.queryAnchorSeconds), this.y(fingerprint.anchorFrequencyHz), 0,
-            this.x(fingerprint.queryTargetSeconds), this.y(fingerprint.targetFrequencyHz), 0,
-          );
-        }
-      }
-      this.webStrokes.set(web);
-      this.webStrokes.material.opacity = 0.22 * clamp01((t - 3) / 2);
-    } else {
+    this.fx.bloom = 1;
+    this.fx.flash = 0;
+    this.fx.chroma = 0;
+    this.fx.focus = chapter === "fingerprint" ? this.pairFocus : null;
+    this.animateStorm(chapter, t);
+    if ((chapter === "stars" && t > 0.6) || (chapter === "spectrum" && this.tilt > 0.7)) this.cue("ignite");
+    this.animateFingerprints(chapter, t, labels);
+    this.animateCatalog(chapter, t, galaxy, labels);
+    this.animateAlignment(chapter, t, song, labels);
+    this.animateEdits(chapter, t, labels);
+    this.animateVoice(chapter, t, voice, labels);
+  }
+
+  private currentPair(local: number) {
+    const pairs = this.data.response.explanation.pairExamples;
+    if (pairs.length === 0) return null;
+    return pairs[Math.min(pairs.length - 1, Math.floor(local / 3.2)) % pairs.length];
+  }
+
+  private animateFingerprints(chapter: ChapterId, t: number, labels: WorldLabel[]) {
+    const data = this.data;
+    const pair = this.currentPair(chapter === "fingerprint" ? t : 0);
+    if (pair) this.pairFocus.copy(this.toWorld(this.fieldPoint(pair.anchorSeconds, pair.anchorFrequencyHz)));
+    if (chapter !== "fingerprint" || !pair) {
+      this.zoneVolume.span(new Vector3(), new Vector3(), 0);
+      this.pulse.alpha(0, 0);
+      this.pulse.commit();
       this.zoneStrokes.set([]);
       this.pairStrokes.set([]);
       this.webStrokes.set([]);
+      return;
     }
-
-    // Catalog galaxy and the lookup's shooting stars.
-    for (const cluster of this.clusters) {
-      const received = this.streakPaths.length > 0 ? cluster.hits : 0;
-      const heat = chapter === "catalog" ? clamp01((t - 2) / 4) : chapter === "musubi" ? 1 : 0;
-      const winner = cluster.songId === data.response.recognition.song?.id;
-      for (const seed of cluster.seeds) {
-        cluster.field.alpha(seed, galaxy * (0.3 + 0.7 * heat * Math.min(1, received / 400)) * (winner ? 1.3 : 0.85));
+    const anchor = this.fieldPoint(pair.anchorSeconds, pair.anchorFrequencyHz);
+    const target = this.fieldPoint(pair.targetSeconds, pair.targetFrequencyHz);
+    const config = data.response.explanation.signalConfig;
+    const frameSeconds = config.hopLength / data.sampleRate;
+    const binHz = data.sampleRate / config.fftSize;
+    // The target zone: a box of air just ahead of the anchor, from the ground to above it.
+    const x0 = this.field.x(pair.anchorSeconds + frameSeconds);
+    const x1 = this.field.x(pair.anchorSeconds + 64 * frameSeconds);
+    const y0 = this.field.y(Math.max(MIN_FREQUENCY_HZ, pair.anchorFrequencyHz - 150 * binHz));
+    const y1 = this.field.y(pair.anchorFrequencyHz + 150 * binHz);
+    const z1 = anchor.z + 0.9;
+    const grow = easeOut(((t % 3.2) - 0.2) / 0.8);
+    const xr = x0 + (x1 - x0) * grow;
+    const box: number[] = [];
+    if (grow > 0) {
+      const corners = [
+        [x0, y0], [xr, y0], [xr, y1], [x0, y1],
+      ];
+      for (let index = 0; index < 4; index += 1) {
+        const [ax, ay] = corners[index];
+        const [bx, by] = corners[(index + 1) % 4];
+        box.push(ax, ay, 0, bx, by, 0, ax, ay, z1, bx, by, z1, ax, ay, 0, ax, ay, z1);
       }
-      const screen = this.project(cluster.center.clone().add(new Vector3(0, 2.2, 0)));
-      const top = [...this.clusters].sort((a, b) => b.hits - a.hits).slice(0, 5);
+    }
+    this.zoneStrokes.set(box);
+    this.zoneVolume.span(new Vector3(x0, y0, 0), new Vector3(xr, y1, z1), grow > 0 ? 0.28 * grow : 0);
+    const draw = easeOut(((t % 3.2) - 0.9) / 0.9);
+    const pairSegments: number[] = [];
+    if (draw > 0) arc(pairSegments, anchor, anchor.clone().lerp(target, draw), 0.6 * draw, 12);
+    this.pairStrokes.set(pairSegments);
+    // A pulse of light runs along the arc: the two stars becoming one number.
+    const run = clamp01(((t % 3.2) - 1.0) / 1.1);
+    const along = anchor.clone().lerp(target, run);
+    along.z += Math.sin(Math.PI * run) * 0.6;
+    this.pulse.move(0, along.x, along.y, along.z);
+    this.pulse.alpha(0, run > 0 && run < 1 ? 1.4 : 0);
+    this.pulse.commit(true);
+    const screen = this.project(this.toWorld(anchor.clone().add(new Vector3(0, 0, 0.5))));
+    labels.push({
+      id: "hash",
+      text: `${Math.round(pair.anchorFrequencyHz)} Hz → ${Math.round(pair.targetFrequencyHz)} Hz, ${(pair.deltaFrames * frameSeconds).toFixed(2)} s apart`,
+      detail: "hashed together into one 64-bit fingerprint",
+      tone: "lantern",
+      x: screen.x,
+      y: screen.y,
+      visible: screen.visible && draw > 0.6,
+    });
+    const web: number[] = [];
+    if (t > 3) {
+      for (const fingerprint of data.response.explanation.matchedFingerprints.slice(0, 220)) {
+        arc(
+          web,
+          this.fieldPoint(fingerprint.queryAnchorSeconds, fingerprint.anchorFrequencyHz),
+          this.fieldPoint(fingerprint.queryTargetSeconds, fingerprint.targetFrequencyHz),
+          0.25,
+          4,
+        );
+      }
+    }
+    this.webStrokes.set(web);
+    this.webStrokes.material.opacity = 0.3 * clamp01((t - 3) / 2);
+  }
+
+  private animateCatalog(chapter: ChapterId, t: number, galaxy: number, labels: WorldLabel[]) {
+    const winnerId = this.data.response.recognition.song?.id;
+    const top = [...this.clusters].sort((a, b) => b.hits - a.hits).slice(0, 5);
+    // The winner is labelled first, so it is never the one dropped when labels would overlap.
+    const ordered = [...this.clusters].sort((a, b) => Number(b.songId === winnerId) - Number(a.songId === winnerId));
+    for (const cluster of ordered) {
+      const clusterIndex = this.clusters.indexOf(cluster);
+      const heat = chapter === "catalog" ? clamp01((t - 2) / 4) : chapter === "musubi" ? 1 : 0;
+      const winner = cluster.songId === winnerId;
+      // After the storm has done its work, the wrong songs flicker and dim; the right one blazes.
+      const verdict = chapter === "catalog" ? clamp01((t - 6) / 2) : 0;
+      const flicker = 0.75 + 0.25 * Math.sin(t * 9 + clusterIndex * 2.1);
+      const fate = winner ? 1 + 0.9 * verdict * (0.85 + 0.15 * Math.sin(t * 4)) : 1 - 0.82 * verdict * flicker;
+      for (const seed of cluster.seeds) {
+        this.clusterField.alpha(seed, galaxy * (0.3 + 0.7 * heat * Math.min(1, cluster.hits / 400)) * (winner ? 1.3 : 0.85) * fate);
+      }
       if (chapter === "catalog" && (top.includes(cluster) || winner)) {
+        const screen = this.project(cluster.center.clone().add(new Vector3(0, 6, 0)));
         labels.push({
           id: `song-${cluster.songId}`,
           text: cluster.name,
@@ -918,76 +943,192 @@ export class ReplayWorld {
         });
       }
     }
-    if (this.clusters.length > 0) {
-      this.clusters[0].field.commit();
-    }
-    this.streakPaths.forEach((path, index) => {
-      // Lookups stream continuously while the camera is out among the songs.
-      const cycle = ((t - 1.5 - path.delay) % 5.5 + 5.5) % 5.5;
-      const progress = chapter === "catalog" && t > 1.5 + path.delay ? clamp01(cycle / 1.4) : 0;
-      const head = path.from.clone().lerp(path.to, easeInOut(progress));
-      head.y += Math.sin(Math.PI * progress) * 3;
-      this.streaks.move(index, head.x, head.y, head.z);
-      this.streaks.alpha(index, progress > 0 && progress < 1 ? 1 : 0);
-    });
-    this.streaks.commit(true);
+    this.clusterField.commit();
+    this.meteors.update(t - 1.5, chapter === "catalog" ? 1 : 0);
+  }
 
-    // The song's sky flies in from its constellation, then slides until every thread pulls taut.
-    const winnerCluster = this.clusters.find((cluster) => cluster.songId === data.response.recognition.song?.id);
-    if (chapter === "musubi" || chapter === "warp") {
-      const arrive = chapter === "musubi" ? easeInOut(t / 2.2) : 1;
-      const slide = chapter === "musubi" ? easeInOut((t - 2.4) / 3.6) : 1;
-      const offset = (1 - slide) * 3.4;
-      const origin = winnerCluster?.center ?? new Vector3(0, 6, -40);
-      const home = new Vector3(offset, 0, -0.08 - (1 - slide) * 1.4);
-      this.songGroup.position.lerpVectors(origin.clone().sub(new Vector3(0, SKY_BASE + SKY_HEIGHT / 2, 0)), home, arrive);
+  private animateAlignment(chapter: ChapterId, t: number, song: number, labels: WorldLabel[]) {
+    const data = this.data;
+    const musubi = chapter === "musubi";
+    const since = t - LOCK_AT;
+    const locked = musubi && since >= 0;
+    const winner = this.clusters.find((cluster) => cluster.songId === data.response.recognition.song?.id);
+    if (musubi || chapter === "warp") {
+      // 1. The winning constellation descends from the galaxy.
+      const arrive = musubi ? easeInOut(t / 2.2) : 1;
+      // 2. It slides across the recording, slowing as if time itself slowed, then snaps home.
+      const progress = clamp01((t - 2.4) / (LOCK_AT - 2.4));
+      const approach = !musubi || locked ? 1 : 0.965 * (1 - Math.pow(1 - progress, 2.6));
+      const worldOrigin = winner?.center ?? GALAXY_CENTER;
+      // The constellation's home in the field's frame (laid: world y is local z).
+      const origin = new Vector3(worldOrigin.x, -worldOrigin.z, worldOrigin.y - FIELD_BASE);
+      const home = new Vector3((1 - approach) * 3.4, 0, (1 - approach) * 1.2);
+      this.songGroup.position.lerpVectors(origin, home, arrive);
       this.songGroup.scale.setScalar(0.12 + 0.88 * arrive);
     }
-    for (let index = 0; index < this.songStars.count; index += 1) this.songStars.alpha(index, song * 0.9);
+    for (let index = 0; index < this.songStars.count; index += 1) {
+      this.songStars.alpha(index, song * (locked ? 0.95 + Math.max(0, 1 - since * 1.5) : 0.95));
+    }
     this.songStars.commit();
 
-    const threadSegments: number[] = [];
+    // 3. On the lock every thread fires at once, and each knot ignites.
+    const segments: number[] = [];
+    const end = new Vector3();
+    const fire = locked ? easeOut(since / 0.35) : 0;
+    const winningPillar = this.pillarMeshes.find((pillar) => pillar.winning);
+    // The pillar's crown in the field's frame (laid: world y is local z, world -z is local y).
+    const crown = winningPillar
+      ? new Vector3(winningPillar.mesh.position.x, -winningPillar.mesh.position.z, winningPillar.mesh.scale.y * 0.82 - FIELD_BASE)
+      : new Vector3(0, FIELD_DEPTH + 1, 4);
     this.threadPairs.forEach((pair, index) => {
-      const knot = chapter === "musubi" && t > 6.1 ? easeOut((t - 6.1) / 0.8) : 0;
-      if (threads > 0.01) {
-        const songPoint = pair.song.clone().multiplyScalar(this.songGroup.scale.x).add(this.songGroup.position);
-        const reach = easeOut(clamp01((t - 1 - (index % 12) * 0.05) / 1.2));
-        const end = pair.query.clone().lerp(songPoint, reach);
-        const sag = Math.min(0.9, songPoint.distanceTo(pair.query) * 0.18);
-        pushCurve(threadSegments, pair.query, end, sag, 6);
+      if (fire > 0) {
+        end.copy(pair.query).lerp(crown, fire);
+        arc(segments, pair.query, end, 1.2 + (index % 7) * 0.25, 10);
       }
-      this.knots.alpha(index, knot * (1 + Math.sin(t * 6 + index) * 0.2));
+      const knot = locked ? easeOut(since / 0.3) : 0;
+      this.knots.alpha(index, knot * (1 + Math.sin(t * 6 + index) * 0.2) + (locked ? Math.max(0, 1 - since * 2) : 0));
       this.knots.size(index, 2.4 + knot * 1.4);
     });
-    this.threads.set(chapter === "musubi" ? threadSegments : []);
-    this.threads.material.opacity = chapter === "musubi" ? threads * (t > 7 ? 0.35 : 1) : 0;
+    this.threads.set(musubi ? segments : []);
+    this.threads.material.linewidth = 2.4;
+    this.threads.material.opacity = locked ? 1 - 0.45 * clamp01((since - 1.5) / 1.5) : 0;
     this.knots.commit();
 
-    // Offset votes: pillars rise from the lake; only the true offset stands tall.
+    // Offset votes rise from the lake while the constellation slides.
+    const rise = musubi ? easeOut((t - 2.2) / 2) : 0;
+    const crumble = locked ? clamp01(since / 0.7) : 0;
     this.pillarMeshes.forEach(({ mesh, height, winning }, index) => {
-      const grow = easeOut((pillars * 1.6) - index * 0.004);
-      mesh.scale.y = Math.max(0.001, height * grow);
+      const grown = height * clamp01(rise * 1.3 - index * 0.004);
+      // 4. The false pillars break; the true one blazes taller.
+      const scale = winning ? grown * (1 + 0.18 * crumble) : grown * (1 - crumble);
+      mesh.scale.y = Math.max(0.001, scale);
       mesh.position.y = mesh.scale.y / 2;
-      (mesh.material as ShaderMaterial).uniforms.uOpacity.value = pillars * (winning ? 1 : 0.55);
+      const flicker = winning || !locked ? 1 : 0.6 + hash(index + t * 40) * 0.4;
+      (mesh.material as ShaderMaterial).uniforms.uOpacity.value = rise * (winning ? 1 : 0.55 * (1 - crumble) * flicker);
     });
-    if (chapter === "musubi") {
-      const decision = data.response.explanation.decision;
-      const winning = this.pillarMeshes.find((pillar) => pillar.winning);
-      if (winning && pillars > 0.5) {
-        const screen = this.project(new Vector3(winning.mesh.position.x, winning.mesh.scale.y + 0.4, winning.mesh.position.z));
-        labels.push({
-          id: "pillar",
-          text: `${decision.leadingVotes} fingerprints agree`,
-          detail: `the next best position has ${decision.runnerUpVotes}`,
-          tone: "thread",
-          x: screen.x,
-          y: screen.y,
-          visible: screen.visible,
-        });
+    if (locked && this.debrisStarted < 0) this.startDebris();
+
+    // 5. Flash, a shockwave across the lake and through the clouds, a kick, a bloom surge.
+    const winning = this.pillarMeshes.find((pillar) => pillar.winning);
+    const center = winning ? winning.mesh.position : new Vector3(0, 0, -FIELD_DEPTH);
+    if (locked) {
+      this.fx.flash = since < 0.45 ? Math.pow(1 - since / 0.45, 2) * 0.9 : 0;
+      this.fx.chroma = Math.exp(-since * 4);
+      this.fx.bloom = 1 + 2.4 * Math.exp(-since * 1.8);
+      if (!this.lockKicked) {
+        this.lockKicked = true;
+        this.rig.kick(0.9);
+        this.cue("lock");
       }
+      const fade = Math.max(0, 1 - since / 3.2);
+      this.lake.ring(0, center.x, center.z, since * 30, fade);
+      this.lake.ring(1, center.x, center.z, Math.max(0, since - 0.3) * 22, fade * 0.6);
+      this.shock = { x: center.x, z: center.z, radius: since * 45, strength: Math.max(0, 1 - since / 5) };
+      // 6. The recording plays: the very sound that was matched.
+      if (!this.lockPlayed && since > 0.5) {
+        this.lockPlayed = true;
+        this.onLock?.();
+      }
+    } else if (musubi) {
+      if (t > LOCK_AT - 3.6) this.cue("riser");
+      // The slow-motion approach: the glow gathers before the impact.
+      this.fx.bloom = 1 + 0.5 * clamp01((t - 3.5) / (LOCK_AT - 3.5));
     }
 
-    // Edits: re-hash under each speed guess; the stars stretch until they meet the song's.
+    if (musubi && winning && rise > 0.5) {
+      const decision = data.response.explanation.decision;
+      const top = this.project(new Vector3(center.x, winning.mesh.scale.y + 0.5, center.z));
+      labels.push({
+        id: "pillar",
+        text: `${decision.leadingVotes} fingerprints agree`,
+        detail: `the next best position has ${decision.runnerUpVotes}`,
+        tone: "thread",
+        x: top.x,
+        y: Math.max(0.12, top.y),
+        visible: top.visible && (!locked || since > 1.4),
+      });
+    }
+    // 7. The song's name lands above the true offset.
+    if (locked && since > 1.6 && data.response.recognition.song) {
+      const title = this.project(new Vector3(center.x + 1.6, winning ? winning.mesh.scale.y * 0.5 : 3, center.z));
+      labels.push({
+        id: "title",
+        text: data.response.recognition.song.name,
+        detail: "the moment every thread agrees",
+        tone: "comet",
+        x: title.x,
+        y: title.y,
+        visible: title.visible,
+      });
+    }
+  }
+
+  /**
+   * Noise as a storm: rain, wind in the clouds, choppy water, and now and then lightning that
+   * lights the whole lake. The stars stay lit through all of it: that is the lesson.
+   */
+  private animateStorm(chapter: ChapterId, t: number) {
+    const storm = this.noiseLevel;
+    this.rain.update(this.shared.uTime.value, storm * 0.42);
+    if (chapter !== "stars" || storm < 0.6) {
+      this.nextBolt = t + 1.2;
+      return;
+    }
+    if (t >= this.nextBolt) {
+      this.boltAt = t;
+      this.nextBolt = t + 2.6 + hash(Math.floor(t * 10)) * 2.2;
+      this.fired.delete("thunder");
+      this.cue("thunder");
+    }
+    // Two quick strokes, never more than three flashes a second.
+    const since = t - this.boltAt;
+    const strike = since < 0 ? 0 : since < 0.09 ? 1 : since < 0.17 ? 0.15 : since < 0.28 ? 0.75 : Math.exp(-(since - 0.28) * 7) * 0.75;
+    if (!this.reducedMotion && strike > 0.01) {
+      this.fx.flash = Math.max(this.fx.flash, strike * 0.2);
+      this.shared.uNight.value = Math.max(0.1, this.shared.uNight.value - strike * 0.05);
+    }
+  }
+
+  private startDebris() {
+    this.debrisStarted = performance.now();
+    for (let index = 0; index < this.debris.count; index += 1) {
+      const home = this.debrisHome[index];
+      const y = hash(index * 1.3) * home.height;
+      this.debris.set(index, [home.x + (hash(index * 2.1) - 0.5) * 0.12, y, home.z + (hash(index * 3.7) - 0.5) * 0.12], 0.7 + hash(index) * 0.8, COLORS.star, 0.9);
+      this.debrisVelocity[index * 3] = (hash(index * 4.9) - 0.5) * 2.2;
+      this.debrisVelocity[index * 3 + 1] = hash(index * 6.1) * 2.4;
+      this.debrisVelocity[index * 3 + 2] = (hash(index * 8.3) - 0.5) * 2.2;
+    }
+    this.debris.commit(true);
+  }
+
+  /** Sparks fall under gravity and go out when they reach the water. */
+  private updateDebris(delta: number) {
+    if (this.debrisStarted < 0) {
+      for (let index = 0; index < this.debris.count; index += 1) this.debris.alpha(index, 0);
+      this.debris.commit();
+      return;
+    }
+    for (let index = 0; index < this.debris.count; index += 1) {
+      const y = this.debris.y(index);
+      if (y <= 0) {
+        this.debris.alpha(index, 0);
+        continue;
+      }
+      this.debrisVelocity[index * 3 + 1] -= 9.8 * delta;
+      this.debris.move(
+        index,
+        this.debris.x(index) + this.debrisVelocity[index * 3] * delta,
+        Math.max(0, y + this.debrisVelocity[index * 3 + 1] * delta),
+        this.debris.z(index) + this.debrisVelocity[index * 3 + 2] * delta,
+      );
+    }
+    this.debris.commit(true);
+  }
+
+  private animateEdits(chapter: ChapterId, t: number, labels: WorldLabel[]) {
+    const data = this.data;
+    const terrain = this.field.terrain;
     if (chapter === "warp" && data.evidence?.speedCurve) {
       const curve = data.evidence.speedCurve.filter((point) => point.pitchFactor === point.speedFactor);
       const sweep = easeInOut(clamp01((t - 0.8) / 6));
@@ -997,25 +1138,32 @@ export class ReplayWorld {
       const guess = t < 7 ? lowest + (highest - lowest) * sweep : found;
       const settle = t < 7 ? 0 : easeOut((t - 7) / 1.2);
       const factor = t < 7 ? guess : guess + (found - guess) * settle;
-      // Place recording stars on the song grid under this guess: time × factor, pitch ÷ factor.
-      this.data.response.explanation.peaks.forEach((peak, index) => {
-        const position = this.stars.position(index);
-        this.stars.move(index, this.x(peak.timeSeconds * factor / found), this.y(peak.frequencyHz / factor * found), position.z);
+      const ratio = factor / found;
+      // The whole range stretches like an accordion: time × ratio, pitch ÷ ratio.
+      terrain.scale.x = ratio;
+      terrain.position.x = -FIELD_WIDTH / 2 + (FIELD_WIDTH / 2) * ratio;
+      terrain.position.y = (-FIELD_DEPTH * Math.log(Math.max(ratio, 1e-3))) / Math.log(MAX_FREQUENCY_HZ / MIN_FREQUENCY_HZ);
+      data.response.explanation.peaks.forEach((peak, index) => {
+        this.stars.move(index, this.field.x((peak.timeSeconds * factor) / found), this.field.y((peak.frequencyHz / factor) * found), STAR_LIFT);
       });
       this.stars.commit(true);
       const maxVotes = Math.max(1, ...curve.map((point) => point.votes));
-      const curveX = (value: number) => -0.4 + ((value - lowest) / (highest - lowest)) * (SKY_WIDTH / 2 - 0.2);
-      const curveY = (votes: number) => SKY_BASE + 0.12 + (votes / maxVotes) * 2.6;
+      const curveX = (value: number) => -0.4 + ((value - lowest) / (highest - lowest)) * (FIELD_WIDTH / 2 - 0.2);
+      const curveY = (votes: number) => 0.1 + (votes / maxVotes) * 4.4;
+      // The vote curve stands in the lake behind the mountains, rising above their ridges.
+      const curveZ = -FIELD_DEPTH - 1.2;
       const segments: number[] = [];
       curve.forEach((point, index) => {
         if (index === 0) return;
         const previous = curve[index - 1];
-        segments.push(curveX(previous.speedFactor), curveY(previous.votes), 0.3, curveX(point.speedFactor), curveY(point.votes), 0.3);
+        segments.push(curveX(previous.speedFactor), curveY(previous.votes), curveZ, curveX(point.speedFactor), curveY(point.votes), curveZ);
       });
       this.curveStrokes.set(segments);
+      const reached = curve.filter((point) => point.speedFactor <= Math.max(guess, factor) + 1e-6);
+      this.curveCurtain.set(reached.flatMap((point) => [curveX(point.speedFactor), curveY(point.votes), curveZ]), 0, 0.5);
       const cursorX = curveX(factor);
-      this.curveCursor.set([cursorX, SKY_BASE, 0.3, cursorX, SKY_BASE + 2.9, 0.3]);
-      const screen = this.project(new Vector3(cursorX, SKY_BASE + 3.2, 0.3));
+      this.curveCursor.set([cursorX, 0, curveZ, cursorX, 4.7, curveZ]);
+      const screen = this.project(new Vector3(cursorX, 5, curveZ));
       labels.push({
         id: "speed",
         text: `${factor.toFixed(2)}×`,
@@ -1025,105 +1173,123 @@ export class ReplayWorld {
         y: screen.y,
         visible: screen.visible,
       });
-    } else {
-      this.curveStrokes.set([]);
-      this.curveCursor.set([]);
-      if (chapter !== "warp") this.restoreStars();
+      return;
     }
-
-    // Covers: the voice lifts out of the band, then two melody lines meet.
-    const melody = data.evidence?.melody;
-    const mix = this.mixPlane;
-    const vocal = this.vocalPlane;
-    if (mix && vocal) {
-      const separate = chapter === "voice" ? easeInOut((t - 1) / 2.4) : 0;
-      (mix.material as MeshBasicMaterial).opacity = voice * (1 - 0.6 * separate) * (t < 6 ? 1 : Math.max(0.15, 1 - (t - 6) / 1.5));
-      (vocal.material as MeshBasicMaterial).opacity = voice * (0.2 + 0.8 * separate) * (t < 6 ? 1 : Math.max(0.2, 1 - (t - 6) / 1.5));
-      vocal.position.y = SKY_BASE + SKY_HEIGHT * 0.35 + separate * 2.6;
-      vocal.position.z = -0.2 + separate * 1.2;
-    }
-    if (melody && chapter === "voice" && t > 6) {
-      const draw = clamp01((t - 6) / 2.5);
-      // A robust pitch range: octave slips in the pitch track should not flatten everything else.
-      const sorted = [...melody.song, ...melody.queryShifted].sort((a, b) => a - b);
-      const low = sorted[Math.floor(sorted.length * 0.05)] ?? 48;
-      const high = sorted[Math.floor(sorted.length * 0.95)] ?? 72;
-      const span = Math.max(4, high - low);
-      const pitchY = (midi: number) =>
-        SKY_BASE + 1.4 + (Math.min(high + 2, Math.max(low - 2, midi)) - low) / span * (SKY_HEIGHT - 2.8);
-      const slide = easeInOut((t - 9) / 1.6);
-      const qx = (index: number) => -SKY_WIDTH * 0.42 + (index / Math.max(1, melody.query.length - 1)) * SKY_WIDTH * 0.84;
-      // The original's notes are placed where the warping path says they meet the singer's,
-      // so each thread ties two notes sung at the same moment of the tune.
-      const songToQuery = new Map<number, number[]>();
-      for (const [queryIndex, songIndex] of melody.path) {
-        const list = songToQuery.get(songIndex) ?? [];
-        list.push(queryIndex);
-        songToQuery.set(songIndex, list);
-      }
-      const songIndices = [...songToQuery.keys()].sort((a, b) => a - b);
-      const sx = (songIndex: number) => {
-        const matches = songToQuery.get(songIndex);
-        return matches ? qx(matches.reduce((sum, value) => sum + value, 0) / matches.length) : 0;
-      };
-      const queryHeight = (index: number) => pitchY(melody.queryShifted[index] - (1 - slide) * (melody.queryShifted[index] - melody.query[index]));
-      const queryLine: number[] = [];
-      const shown = Math.floor(melody.query.length * draw);
-      for (let index = 1; index < shown; index += 1) {
-        queryLine.push(qx(index - 1), queryHeight(index - 1), 0.4, qx(index), queryHeight(index), 0.4);
-      }
-      const songLine: number[] = [];
-      const songShown = Math.floor(songIndices.length * draw);
-      for (let index = 1; index < songShown; index += 1) {
-        const a = songIndices[index - 1];
-        const b = songIndices[index];
-        if (a >= melody.song.length || b >= melody.song.length) continue;
-        songLine.push(sx(a), pitchY(melody.song[a]), 0.3, sx(b), pitchY(melody.song[b]), 0.3);
-      }
-      this.contourQuery.set(queryLine);
-      this.contourSong.set(songLine);
-      const tie = clamp01((t - 11) / 1.5);
-      const dtw: number[] = [];
-      if (tie > 0) {
-        melody.path.slice(0, Math.floor(melody.path.length * tie)).forEach(([queryIndex, songIndex], index) => {
-          if (index % 2 === 1 || queryIndex >= melody.query.length || songIndex >= melody.song.length) return;
-          dtw.push(qx(queryIndex), queryHeight(queryIndex), 0.4, sx(songIndex), pitchY(melody.song[songIndex]), 0.3);
-        });
-      }
-      this.dtwThreads.set(dtw);
-      if (slide > 0.9) {
-        const screen = this.project(new Vector3(qx(0), pitchY(high) + 0.6, 0.4));
-        const shift = melody.keyShiftSemitones;
-        labels.push({
-          id: "key",
-          text: shift === 0 ? "same key as the original" : `sung ${Math.abs(shift)} semitone${Math.abs(shift) === 1 ? "" : "s"} ${shift > 0 ? "higher" : "lower"}`,
-          detail: "the singer (lantern) against the original melody (teal)",
-          tone: "lantern",
-          x: screen.x,
-          y: screen.y,
-          visible: screen.visible,
-        });
-      }
-    } else {
-      this.contourQuery.set([]);
-      this.contourSong.set([]);
-      this.dtwThreads.set([]);
-    }
+    this.curveStrokes.set([]);
+    this.curveCursor.set([]);
+    this.curveCurtain.set([], 0, 0);
+    terrain.scale.x += (1 - terrain.scale.x) * 0.15;
+    terrain.position.x += (0 - terrain.position.x) * 0.15;
+    terrain.position.y += (0 - terrain.position.y) * 0.15;
+    this.restoreStars();
   }
 
   private restoreStars() {
     const peaks = this.data.response.explanation.peaks;
     let moved = false;
     peaks.forEach((peak, index) => {
-      const position = this.stars.position(index);
-      const x = this.x(peak.timeSeconds);
-      const y = this.y(peak.frequencyHz);
-      if (Math.abs(position.x - x) > 1e-4 || Math.abs(position.y - y) > 1e-4) {
-        this.stars.move(index, position.x + (x - position.x) * 0.15, position.y + (y - position.y) * 0.15, position.z);
+      const x = this.field.x(peak.timeSeconds);
+      const y = this.field.y(peak.frequencyHz);
+      const px = this.stars.x(index);
+      const py = this.stars.y(index);
+      if (Math.abs(px - x) > 1e-4 || Math.abs(py - y) > 1e-4) {
+        this.stars.move(index, px + (x - px) * 0.15, py + (y - py) * 0.15, STAR_LIFT);
         moved = true;
       }
     });
     if (moved) this.stars.commit(true);
+  }
+
+  private animateVoice(chapter: ChapterId, t: number, voice: number, labels: WorldLabel[]) {
+    const melody = this.data.evidence?.melody;
+    const mix = this.mixPlane;
+    const vocal = this.vocalPlane;
+    const base = FIELD_BASE + FIELD_DEPTH * 0.35;
+    if (mix && vocal) {
+      const separate = chapter === "voice" ? easeInOut((t - 1) / 2.4) : 0;
+      (mix.material as MeshBasicMaterial).opacity = 0.6 * voice * (1 - 0.6 * separate) * (t < 6 ? 1 : Math.max(0.15, 1 - (t - 6) / 1.5));
+      (vocal.material as MeshBasicMaterial).opacity = 0.7 * voice * (0.2 + 0.8 * separate) * (t < 6 ? 1 : Math.max(0.2, 1 - (t - 6) / 1.5));
+      vocal.position.y = base + separate * 2.6;
+      vocal.position.z = 1.0 + separate * 1.4;
+    }
+    if (!(melody && chapter === "voice" && t > 6)) {
+      this.queryCurtain.set([], 0, 0);
+      this.songCurtain.set([], 0, 0);
+      this.contourQuery.set([]);
+      this.contourSong.set([]);
+      this.dtwThreads.set([]);
+      return;
+    }
+    const z = 1.6;
+    const draw = clamp01((t - 6) / 2.5);
+    // A robust pitch range: octave slips in the pitch track should not flatten everything else.
+    const sorted = [...melody.song, ...melody.queryShifted].sort((a, b) => a - b);
+    const low = sorted[Math.floor(sorted.length * 0.05)] ?? 48;
+    const high = sorted[Math.floor(sorted.length * 0.95)] ?? 72;
+    const span = Math.max(4, high - low);
+    const pitchY = (midi: number) => FIELD_BASE + 1.4 + ((Math.min(high + 2, Math.max(low - 2, midi)) - low) / span) * (FIELD_DEPTH - 2.8);
+    const slide = easeInOut((t - 9) / 1.6);
+    const qx = (index: number) => -FIELD_WIDTH * 0.42 + (index / Math.max(1, melody.query.length - 1)) * FIELD_WIDTH * 0.84;
+    // The original's notes sit where the warping path says they meet the singer's.
+    const songToQuery = new Map<number, number[]>();
+    for (const [queryIndex, songIndex] of melody.path) {
+      const list = songToQuery.get(songIndex) ?? [];
+      list.push(queryIndex);
+      songToQuery.set(songIndex, list);
+    }
+    const songIndices = [...songToQuery.keys()].sort((a, b) => a - b);
+    const sx = (songIndex: number) => {
+      const matches = songToQuery.get(songIndex);
+      return matches ? qx(matches.reduce((sum, value) => sum + value, 0) / matches.length) : 0;
+    };
+    const queryHeight = (index: number) => pitchY(melody.queryShifted[index] - (1 - slide) * (melody.queryShifted[index] - melody.query[index]));
+    const queryLine: number[] = [];
+    const shown = Math.floor(melody.query.length * draw);
+    for (let index = 1; index < shown; index += 1) {
+      queryLine.push(qx(index - 1), queryHeight(index - 1), z + 0.1, qx(index), queryHeight(index), z + 0.1);
+    }
+    const songLine: number[] = [];
+    const songShown = Math.floor(songIndices.length * draw);
+    for (let index = 1; index < songShown; index += 1) {
+      const a = songIndices[index - 1];
+      const b = songIndices[index];
+      if (a >= melody.song.length || b >= melody.song.length) continue;
+      songLine.push(sx(a), pitchY(melody.song[a]), z, sx(b), pitchY(melody.song[b]), z);
+    }
+    this.contourQuery.set(queryLine);
+    this.contourSong.set(songLine);
+    const floor = pitchY(low) - 0.6;
+    const queryPoints: number[] = [];
+    for (let index = 0; index < shown; index += 1) queryPoints.push(qx(index), queryHeight(index), z + 0.1);
+    this.queryCurtain.set(queryPoints, floor, 0.13);
+    const songPoints: number[] = [];
+    for (let index = 0; index < songShown; index += 1) {
+      const songIndex = songIndices[index];
+      if (songIndex < melody.song.length) songPoints.push(sx(songIndex), pitchY(melody.song[songIndex]), z);
+    }
+    this.songCurtain.set(songPoints, floor, 0.09);
+    const tie = clamp01((t - 11) / 1.5);
+    const dtw: number[] = [];
+    if (tie > 0) {
+      melody.path.slice(0, Math.floor(melody.path.length * tie)).forEach(([queryIndex, songIndex], index) => {
+        if (index % 2 === 1 || queryIndex >= melody.query.length || songIndex >= melody.song.length) return;
+        dtw.push(qx(queryIndex), queryHeight(queryIndex), z + 0.1, sx(songIndex), pitchY(melody.song[songIndex]), z);
+      });
+    }
+    this.dtwThreads.set(dtw);
+    if (slide > 0.9) {
+      const screen = this.project(new Vector3(qx(0), pitchY(high) + 0.6, z));
+      const shift = melody.keyShiftSemitones;
+      labels.push({
+        id: "key",
+        text: shift === 0 ? "same key as the original" : `sung ${Math.abs(shift)} semitone${Math.abs(shift) === 1 ? "" : "s"} ${shift > 0 ? "higher" : "lower"}`,
+        detail: "the singer (lantern) against the original melody (teal)",
+        tone: "lantern",
+        x: screen.x,
+        y: screen.y,
+        visible: screen.visible,
+      });
+    }
   }
 
   private listenGlow(index: number): number {
@@ -1132,38 +1298,28 @@ export class ReplayWorld {
     return since >= 0 && since < 0.35 ? 1.4 * (1 - since / 0.35) : 0;
   }
 
-  private paintNoise() {
-    const context = this.noiseCanvas.getContext("2d");
-    if (!context) return;
-    const image = context.createImageData(this.noiseCanvas.width, this.noiseCanvas.height);
-    for (let index = 0; index < image.data.length; index += 4) {
-      const value = Math.random();
-      image.data[index] = 200;
-      image.data[index + 1] = 170;
-      image.data[index + 2] = 235;
-      image.data[index + 3] = Math.round(value * value * 150);
-    }
-    context.putImageData(image, 0, 0);
-    this.noiseTexture.needsUpdate = true;
-  }
-
   dispose() {
-    this.stars.dispose();
-    this.streaks.dispose();
-    this.songStars.dispose();
-    this.knots.dispose();
-    this.clusters[0]?.field.dispose();
+    for (const field of [this.stars, this.songStars, this.knots, this.clusterField, this.debris, this.pulse]) field.dispose();
+    for (const effect of [this.rain, this.shatter, this.meteors, this.zoneVolume, this.curveCurtain, this.queryCurtain, this.songCurtain]) effect.dispose();
+    this.post?.dispose();
     for (const strokes of [this.pairStrokes, this.zoneStrokes, this.webStrokes, this.threads, this.curveStrokes, this.curveCursor, this.contourQuery, this.contourSong, this.dtwThreads]) {
       strokes.dispose();
     }
-    this.scene.traverse((object) => {
-      if (object instanceof Mesh) {
-        object.geometry.dispose();
-        const material = object.material as MeshBasicMaterial | ShaderMaterial;
-        if ("map" in material && material.map) material.map.dispose();
-        material.dispose();
-      }
-    });
+    this.scenery.dispose();
+    this.lake.dispose();
+    this.field.dispose();
+    for (const group of [this.pillars, this.voiceGroup]) {
+      group.traverse((object) => {
+        if (object instanceof Mesh) {
+          object.geometry.dispose();
+          const material = object.material as MeshBasicMaterial | ShaderMaterial;
+          if ("map" in material && material.map) material.map.dispose();
+          material.dispose();
+        }
+      });
+    }
+    this.waveform.geometry.dispose();
+    this.waveformMaterial.dispose();
     this.sprite.dispose();
     this.renderer.dispose();
   }

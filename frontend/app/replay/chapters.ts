@@ -56,7 +56,7 @@ export function buildChapters(data: ReplayData): ChapterSpec[] {
       short: "Stars",
       kanji: "星",
       title: "Only the brightest points survive",
-      sentence: `Most of the sky is haze. In every small patch Apollo keeps only the brightest point, at most ${config.peaksPerSecond} a second. Noise can fog the whole sky, yet it rarely moves these peaks. Press N to add noise.`,
+      sentence: `Most of the sky is haze. In every small patch Apollo keeps only the brightest point, at most ${config.peaksPerSecond} a second. A storm of noise can churn the whole lake, yet it rarely moves these peaks. Press N to add noise.`,
       figure: { value: formatCount(explanation.counts.peaks), unit: "stars" },
       settle: 5.5,
     },

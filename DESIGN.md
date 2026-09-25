@@ -125,37 +125,72 @@ It appears **the moment a live check confirms**, before the explanation arrives.
 - **No match:** the card says "No song in the catalog matched", and you can still watch what was
   heard.
 
-### 4.4 The replay: a camera journey through one 3D world
+### 4.4 The replay: one unbroken 3D film
 
-One three.js scene (`replay/world.ts`), with the camera flying between stops. The wide stops frame
-the 3D sky **exactly** where the live sky was painted, so the replay continues the picture the
-audience just watched instead of cutting to a new one.
+The replay is a real 3D world (`replay/world.ts` plus the modules in `replay/world/`), filmed by
+one camera that never cuts. It has:
+- a banded sky dome;
+- two ranges of hills;
+- utility poles receding into the distance, with sagging wires;
+- layers of cel-shaded clouds at many depths;
+- a lake that really reflects the sky, hills, stars, threads and pillars.
 
-| Stop | Kanji | What you see | What it teaches |
+Distance fog, parallax and depth of field give it depth. The camera flies curved paths and slows
+into a gentle drift at each beat: it never freezes. Night falls as the replay goes on, so the white
+stars and red threads are always the brightest things on screen.
+
+**The opening reveal.** The replay opens on exactly the sky the audience just watched. That sky
+tips back onto the lake like a drawbridge and becomes **swells of water made of sound**:
+- time runs across;
+- pitch runs into the distance;
+- loudness is the height of each swell.
+
+Quiet sound sinks back into the real lake, so the data belongs to the scene instead of sitting on
+top of it. The stars ride the crests.
+
+| Beat | Kanji | What you see | What it teaches |
 |---|---|---|---|
-| Sound | 音 | The waveform standing in the sky; a round lens shows 25 ms of real samples as dots | Sound is just a list of numbers (e.g. 48,000 a second) |
-| Spectrum | 空 | An analysis beam sweeps across and paints the sky slice by slice; the waveform lies down onto the lake | STFT: time → right, pitch → up |
-| Stars | 星 | The camera drifts through the sky; peaks ignite. Press **N** (or the button) to add noise: the sky fogs, the stars stay | Peaks survive noise |
-| Fingerprints | 結 | An anchor star, its target zone (amber bracket) and the pairs it makes | Two pitches + time gap = one hash |
-| Catalog | 星空 | The camera pulls out to a galaxy: one constellation per catalog song. Lookups stream to them as shooting stars | Hash lookup; most hits are coincidences |
-| Speed search (edits only) | 速度 | The stars stretch through every speed/pitch guess; the vote curve on the lake spikes at the right one | How edits are still found |
-| Voice (covers only) | 声 | The voice lifts out of the band; the singer's melody line and the original's are tied by the time-warping path | Demucs + pitch tracking + DTW |
-| Alignment | 結び | The song's own stars (teal) fly in and slide until red threads tie them to the recording's; offset votes rise from the lake as light pillars, and only the true offset stands tall | Offset voting: the core of the match |
-| Listen | 聴く | Play the recording as only its stars (sine tones) against the real recording | A few hundred peaks keep the tune |
-| Answer | 音の星空 | The title card again | |
+| Sound | 音 | The waveform standing in the sky; a round lens shows 25 ms of real samples as dots | Sound is just a list of numbers |
+| Spectrum | 空 | An amber analysis beam sweeps across. The waveform shatters into 2,600 sparks, and each flies to the pitch where its moment is loudest, painting the sky. Then the drawbridge reveal | STFT: time → right, pitch → up |
+| Stars | 星 | A low sweep along the swells; the peaks ignite. **N** (or the button) starts a storm: rain, wind in the clouds, choppy water, lightning. The stars burn brighter through it | Peaks survive noise |
+| Fingerprints | 結 | Close-up with depth of field: an anchor star, its target zone as a glowing amber box of air, and a pulse of light running along each pair's arc | Two pitches + time gap = one hash |
+| Catalog | 星空 | The camera rises through the clouds to a galaxy, one constellation per song. A meteor storm of up to 1,600 lookups rains up into it, split by the real hit counts. The wrong songs flicker and dim; the right one blazes | Hash lookup; most hits are coincidences |
+| Speed search (edits only) | 速度 | The whole field stretches like an accordion through the speed guesses, while a teal curtain of light (the vote curve) rises from the lake and spikes at the found speed | How edits are still found |
+| Voice (covers only) | 声 | The voice lifts out of the band. The singer's melody (amber) and the original's (teal) become ribbons of light that slide together as the key shift is undone, tied by red time-warping threads | Demucs + pitch tracking + DTW |
+| Alignment | 結び | **The climax** (see below) | Offset voting: the core of the match |
+| Listen | 聴く | A slow orbit; the stars pulse as they are played as sine tones, or as the real recording plays | A few hundred peaks keep the tune |
+| Answer | 音の星空 | A long pull-back to the whole world as the title card lands | |
 
-- **Every stop** has a kanji, a title, one plain-English sentence built from **this recording's
-  real numbers**, and one big figure (e.g. "344 fingerprints agree").
-- **The highlight** (after "Watch how it was found") plays Spectrum → Stars → Catalog → (Speed
-  search | Voice) → Alignment → Answer automatically, without the sentences.
+**The lock (Alignment):**
+1. The song's teal constellation descends from the galaxy while the offset-vote pillars rise from
+   the lake.
+2. The constellation slides across the recording in slow motion, a rising tone building
+   underneath.
+3. Snap: a red thread fires from every matched star into the one true pillar.
+4. The false pillars crumble into sparks that fall into the water.
+5. A white flash, shockwave rings racing across the lake, clouds pushed outward, a camera punch,
+   a deep boom and a bright shimmer.
+6. The user's own recording plays, and the song's name lands beside the pillar. The matched song
+   itself plays on Spotify, from the title card.
+
+**Controls:**
+- **The highlight** ("Watch how it was found") flies Spectrum → Stars → Catalog → (Speed search |
+  Voice) → Alignment → Answer as one shot, without the sentences.
 - **Class mode** is driven by the presenter:
   - next: → ↓ Page Down (so clickers work);
   - previous: ← ↑ Page Up;
-  - Space replays the current stop;
-  - N adds noise on Stars;
-  - Esc leaves;
-  - a stop rail along the bottom can be clicked.
-- A "How long it took" timing stop existed and was **removed at the user's request**.
+  - Space replays the current beat;
+  - N starts or stops the storm on Stars;
+  - M mutes;
+  - Esc leaves.
+
+  The beat rail can be clicked, and a sound toggle and volume slider sit beside it.
+- **Sound design** is synthesised with Web Audio, so nothing is downloaded: whooshes on camera
+  moves, a crackle when stars ignite, rain and thunder in the storm, the riser and the boom at the
+  lock. It exists only inside the replay, never while listening.
+- **Captions:** every beat keeps its kanji, a title, one plain-English sentence built from this
+  recording's real numbers, and one big figure.
+- **Removed:** a "How long it took" timing stop existed and was removed at the user's request.
 
 ## 5. Where the data comes from
 
@@ -179,8 +214,16 @@ audience just watched instead of cutting to a new one.
 Full rules and time budgets are in `AGENTS.md`. Summary:
 
 - **The answer never waits for visuals.** It shows on the first confirmed live check.
-- **Heavy work only on request.** Evidence, decoding and building the 3D world start when the
-  replay is opened. Opening it costs a few seconds: about 4 s for a normal song, 7 s for an edit.
+- **Heavy work only on request.** The replay's code (three.js world, `postprocessing`, audio) is
+  loaded with a dynamic import. It loads, along with the evidence, decoding and scene building,
+  only when the replay is opened. Shaders are compiled while "Preparing the replay…" shows.
+  Opening costs a few seconds: about 1–4 s for a normal song, up to about 7 s for an edit.
+- **Frame rate:** the target is 60 fps at 1080p on the RTX 3050 (144 fps measured on the dev
+  machine). If frames stay slower than about 45 fps, quality steps down, never back up: depth of
+  field first, then antialiasing, then resolution. The pixel ratio is capped at 1.25, and rain,
+  meteors, sparks and swells all animate on the GPU.
+- **Accessibility:** `prefers-reduced-motion` removes camera shake, flashes, chromatic pulses and
+  lightning, and gentles the camera. Flashes never exceed three a second.
 - **Listening stays light:** the painted sky is paused and the live sky is capped at 30 fps.
 - **Measured time from pressing Listen to the song showing** (production build, 1920×1080):
   about 3.4 s for a normal clip; about 9.6 s for the F1 0.89× edit.
@@ -199,9 +242,19 @@ frontend/app/
     live-sky.tsx      live FFT spectrogram + stars + checks while listening
     fft.ts, stars.ts, paint.ts, geometry.ts   shared maths and screen geometry
   replay/
-    world.ts          the three.js world, camera stops, per-frame choreography
-    replay.tsx        replay UI: captions, figures, lens, stop rail, keys
-    chapters.ts       stop list and the sentences built from real numbers
+    world.ts          orchestrates the 3D world: beats, camera poses, the lock, the storm
+    world/            one concern per file:
+      shared.ts         dimensions, colour meanings, shared uniforms, StarField, Strokes
+      scenery.ts        sky dome, hills, poles and wires, layered clouds
+      lake.ts           reflective water with ripples and shockwave rings
+      terrain.ts        the spectrogram as swells of water (GPU-displaced), analysis beam
+      camera.ts         continuous spline flights, drift, shake
+      effects.ts        shatter sparks, meteor storm, glowing volume, light curtains
+      rain.ts           storm rain
+      post.ts           bloom, depth of field, flash, chromatic pulse, grain, vignette, adaptive quality
+      audio.ts          synthesised replay sound with master volume and mute
+    replay.tsx        replay UI: captions, figures, lens, beat rail, keys, sound controls
+    chapters.ts       beat list and the sentences built from real numbers
     data.ts           builds replay data from the explanation + evidence
     sonify.ts         plays the stars as sine tones
 frontend/lib/api.ts   API types incl. evidence
@@ -231,10 +284,8 @@ Six old components were deleted: `constellation-plot`, `fingerprint-alignment`,
   the trade-off for a fast answer.
 - **Covers are slower with 25+ songs:** the early melody answer at 10 s sits near its acceptance
   margin, so it can fall back to the full 15 s.
-- **Proposed, not built:**
-  - bloom/glow post-processing;
-  - a bigger "lock" moment in Alignment, where all threads fire at once and the real song plays
-    from the matched second;
-  - one continuous camera flight instead of stops;
-  - a meteor shower on the answer.
+- **Frame rate on the real demo laptop and projector is unmeasured:** only the dev machine has
+  been measured. Watch it once on the RTX 3050; adaptive quality covers slow frames.
+- **Multisampling is off** in post-processing: it rendered black on the dev machine's GPU backend.
+- **The build plan and its deviations** are in `docs/REPLAY_3D_PLAN.md`.
 - **Scope:** laptop and projector only; there is no mobile layout by design.

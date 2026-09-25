@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchRecognitionEvidence,
@@ -10,11 +11,14 @@ import {
   type RecognitionResponse,
 } from "../lib/api";
 import { type ReplayData, buildSky, decodeRecording, songStarsOnRecording } from "./replay/data";
-import Replay from "./replay/replay";
 import Horizon from "./sky/horizon";
 import LiveSky, { type LiveCheck } from "./sky/live-sky";
 import PaintedSky from "./sky/painted-sky";
 import TitleCard from "./title-card";
+
+// The replay and its 3D world load only when someone opens it: never during listening.
+const loadReplay = () => import("./replay/replay");
+const Replay = dynamic(loadReplay, { ssr: false });
 
 // Listening stops as soon as two consecutive checks agree on the song and its position,
 // like Shazam; otherwise it stops at the maximum and recognizes whatever was captured.
@@ -611,6 +615,7 @@ export default function Home() {
     setReplayMode(null);
     setPendingReplay(mode);
     setEvidenceWanted(true);
+    void loadReplay();
   }
 
   function closeReplay() {

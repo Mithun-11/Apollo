@@ -6,6 +6,7 @@ import { type ChapterSpec, HIGHLIGHT, buildChapters } from "./chapters";
 import type { ReplayData } from "./data";
 import { playStars } from "./sonify";
 import { type WorldLabel, ReplayWorld } from "./world";
+import { ReplayAudio } from "./world/audio";
 
 type ReplayProps = {
   data: ReplayData;
@@ -22,6 +23,9 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
   const [labels, setLabels] = useState<WorldLabel[]>([]);
   const [noise, setNoise] = useState(false);
   const [playing, setPlaying] = useState<"stars" | "recording" | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(0.7);
+  const audioRef = useRef<ReplayAudio | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
   const allChapters = useMemo(() => buildChapters(data), [data]);
@@ -32,6 +36,10 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
   const [index, setIndex] = useState(0);
   const chapter: ChapterSpec = chapters[Math.min(index, chapters.length - 1)];
   const firstStop = useRef(chapters[0].id);
+  // The world is built once per replay, for the mode it was opened in.
+  const openedAs = useRef(mode);
+  // At the lock the world asks for the recording to play: the very sound that was matched.
+  const onLockRef = useRef<() => void>(() => {});
   useEffect(() => {
     firstStop.current = chapters[0].id;
   }, [chapters]);
@@ -41,9 +49,23 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
     const canvas = canvasRef.current;
     if (!canvas) return;
     let world: ReplayWorld;
+    let audio: ReplayAudio | null = null;
     try {
-      world = new ReplayWorld(canvas, data, window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      audio = new ReplayAudio();
     } catch {
+      audio = null; // No Web Audio: the replay simply stays silent.
+    }
+    audioRef.current = audio;
+    try {
+      world = new ReplayWorld(canvas, data, {
+        reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+        highlight: openedAs.current === "highlight",
+        onLock: () => onLockRef.current(),
+        onCue: (cue) => audio?.play(cue),
+      });
+    } catch {
+      audio?.dispose();
+      audioRef.current = null;
       return;
     }
     worldRef.current = world;
@@ -55,6 +77,7 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
     const loop = (now: number) => {
       animation = requestAnimationFrame(loop);
       const next = world.frame(now);
+      audio?.rain(world.stormLevel());
       if (now - lastLabels > 50) {
         lastLabels = now;
         setLabels(next);
@@ -66,6 +89,8 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
       window.removeEventListener("resize", onResize);
       world.dispose();
       worldRef.current = null;
+      audio?.dispose();
+      audioRef.current = null;
     };
   }, [data]);
 
@@ -111,6 +136,11 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
           worldRef.current?.setNoise(!current);
           return !current;
         });
+      } else if (event.key.toLowerCase() === "m") {
+        setMuted((current) => {
+          audioRef.current?.setMuted(!current);
+          return !current;
+        });
       } else if (event.key === "Escape") {
         onExit();
       }
@@ -143,6 +173,10 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
     audio.onended = () => setPlaying(null);
     stopRef.current = () => audio.pause();
   };
+
+  useEffect(() => {
+    onLockRef.current = () => playTheRecording();
+  });
 
   const verdict = chapter.id === "verdict";
   return (
@@ -231,6 +265,33 @@ export default function Replay({ data, mode, recordingUrl, onExit, onClassMode, 
           <button type="button" className="journey-arrow" onClick={() => go(index + 1)} disabled={index === chapters.length - 1} aria-label="Next stop">
             <Arrow direction="right" />
           </button>
+          <div className="journey-sound">
+            <button
+              type="button"
+              className="journey-mute"
+              aria-pressed={muted}
+              onClick={() => {
+                audioRef.current?.setMuted(!muted);
+                setMuted(!muted);
+              }}
+            >
+              {muted ? "Sound off" : "Sound on"}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
+              aria-label="Replay volume"
+              disabled={muted}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                audioRef.current?.setVolume(next);
+                setVolume(next);
+              }}
+            />
+          </div>
           <button type="button" className="journey-exit" onClick={onExit}>
             Leave
           </button>

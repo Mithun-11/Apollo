@@ -98,10 +98,6 @@ button {
   transition: opacity 1.4s var(--ease-out);
 }
 
-.stage-replay .horizon {
-  opacity: 0;
-}
-
 /* The film credit, standing at the left edge. */
 .credit {
   position: absolute;
@@ -778,4 +774,37 @@ button {
   .title-card {
     top: 14vh;
   }
+}
+
+/* Replay sound: a mute toggle and a volume slider beside the stop arrows. */
+.journey-sound {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 14px;
+}
+
+.journey-mute {
+  padding: 8px 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--star-soft);
+  text-shadow: var(--shadow-text);
+}
+
+.journey-mute:hover,
+.journey-mute[aria-pressed="true"] {
+  color: var(--star);
+}
+
+.journey-sound input[type="range"] {
+  width: 96px;
+  accent-color: var(--lantern);
+  cursor: pointer;
+}
+
+.journey-sound input[type="range"]:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
