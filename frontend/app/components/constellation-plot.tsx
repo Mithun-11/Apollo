@@ -1,6 +1,8 @@
 "use client";
 
-import type { PeakDisplay } from "../lib/api";
+import { useState } from "react";
+import type { PeakDisplay } from "../../lib/api";
+import ChartCursor from "./chart-cursor";
 
 const MAX_RENDERED_PEAKS = 1_000;
 
@@ -30,6 +32,7 @@ export default function ConstellationPlot({
   cursorSeconds?: number;
 }) {
   const visible = peaks.slice(0, MAX_RENDERED_PEAKS);
+  const [hovered, setHovered] = useState<PeakDisplay | null>(null);
   const dur   = durationSeconds    || 1;
   const maxHz = maximumFrequencyHz || 1;
 
@@ -38,6 +41,17 @@ export default function ConstellationPlot({
 
   return (
     <figure className="chart-figure">
+      <ChartCursor onHover={(x, y) => {
+        if (x === null || y === null) { setHovered(null); return; }
+        const time = Math.max(0, Math.min(1, (x * VW - LEFT) / PW)) * durationSeconds;
+        const hz = Math.max(0, Math.min(1, 1 - (y * VH - TOP) / PH)) * maximumFrequencyHz;
+        setHovered(visible.reduce<PeakDisplay | null>((best, peak) => !best || Math.abs(peak.timeSeconds - time) + Math.abs(peak.frequencyHz - hz) / 1000 < Math.abs(best.timeSeconds - time) + Math.abs(best.frequencyHz - hz) / 1000 ? peak : best, null));
+      }} describe={(x, y) => {
+        const time = Math.max(0, Math.min(1, (x * VW - LEFT) / PW)) * durationSeconds;
+        const hz = Math.max(0, Math.min(1, 1 - (y * VH - TOP) / PH)) * maximumFrequencyHz;
+        const nearest = visible.reduce<PeakDisplay | null>((best, peak) => !best || Math.abs(peak.timeSeconds - time) + Math.abs(peak.frequencyHz - hz) / 1000 < Math.abs(best.timeSeconds - time) + Math.abs(best.frequencyHz - hz) / 1000 ? peak : best, null);
+        return `${time.toFixed(2)} s · ${Math.round(hz)} Hz${nearest ? ` · nearest peak ${nearest.amplitudeDb.toFixed(1)} dB` : ""}`;
+      }}>
       <svg
         className="constellation-plot"
         viewBox={`0 0 ${VW} ${VH}`}
@@ -45,16 +59,16 @@ export default function ConstellationPlot({
         aria-label="Detected spectral peaks plotted over the query timeline"
       >
         {/* White background */}
-        <rect x="0" y="0" width={VW} height={VH} fill="#ffffff" rx="4" />
+        <rect x="0" y="0" width={VW} height={VH} fill="#0f1e24" rx="4" />
         {/* Plot area */}
-        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="#f9fafb" rx="2" />
+        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="#152830" rx="2" />
 
         {/* Grid lines — time */}
         {Array.from({ length: timeTickCount + 1 }, (_, i) => {
           const x = LEFT + (i / timeTickCount) * PW;
           return (
             <line key={`tg-${i}`} x1={x} y1={TOP} x2={x} y2={TOP + PH}
-              stroke="rgba(0,0,0,0.07)" strokeWidth="1" />
+              stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
           );
         })}
 
@@ -63,7 +77,7 @@ export default function ConstellationPlot({
           const y = TOP + (i / freqTickCount) * PH;
           return (
             <line key={`fg-${i}`} x1={LEFT} y1={y} x2={LEFT + PW} y2={y}
-              stroke="rgba(0,0,0,0.07)" strokeWidth="1" />
+              stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
           );
         })}
 
@@ -88,9 +102,10 @@ export default function ConstellationPlot({
             </g>
           );
         })}
+        {hovered && <circle cx={LEFT + clamp(hovered.timeSeconds / dur) * PW} cy={TOP + (1 - clamp(hovered.frequencyHz / maxHz)) * PH} r="8" fill="none" stroke="#ffffff" strokeWidth="2" />}
 
         {/* Border */}
-        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="none" stroke="#d1d5db" strokeWidth="1" rx="2" />
+        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="none" stroke="#2c454d" strokeWidth="1" rx="2" />
         {cursorSeconds !== undefined && <line x1={LEFT + clamp(cursorSeconds / dur) * PW} x2={LEFT + clamp(cursorSeconds / dur) * PW} y1={TOP} y2={TOP + PH} stroke="#d97706" strokeWidth="2" />}
 
         {/* Time axis ticks + labels */}
@@ -99,8 +114,8 @@ export default function ConstellationPlot({
           const x = LEFT + (i / timeTickCount) * PW;
           return (
             <g key={`tl-${i}`}>
-              <line x1={x} y1={TOP + PH} x2={x} y2={TOP + PH + 4} stroke="#9ca3af" strokeWidth="1" />
-              <text x={x} y={TOP + PH + 16} fill="#374151" fontSize="12" textAnchor="middle">
+              <line x1={x} y1={TOP + PH} x2={x} y2={TOP + PH + 4} stroke="#739ba3" strokeWidth="1" />
+              <text x={x} y={TOP + PH + 16} fill="#8eb8c0" fontSize="12" textAnchor="middle">
                 {t.toFixed(1)}s
               </text>
             </g>
@@ -114,8 +129,8 @@ export default function ConstellationPlot({
           const label = hz >= 1000 ? `${(hz / 1000).toFixed(1)}k` : `${Math.round(hz)}`;
           return (
             <g key={`fl-${i}`}>
-              <line x1={LEFT - 4} y1={y} x2={LEFT} y2={y} stroke="#9ca3af" strokeWidth="1" />
-              <text x={LEFT - 7} y={y + 4} fill="#374151" fontSize="11" textAnchor="end">
+              <line x1={LEFT - 4} y1={y} x2={LEFT} y2={y} stroke="#739ba3" strokeWidth="1" />
+              <text x={LEFT - 7} y={y + 4} fill="#8eb8c0" fontSize="11" textAnchor="end">
                 {label}
               </text>
             </g>
@@ -123,13 +138,13 @@ export default function ConstellationPlot({
         })}
 
         {/* Axis titles */}
-        <text x={LEFT + PW / 2} y={VH - 4} fill="#6b7280" fontSize="12" textAnchor="middle">
+        <text x={LEFT + PW / 2} y={VH - 4} fill="#8eb8c0" fontSize="12" textAnchor="middle">
           Time (s)
         </text>
         <text
           x={11}
           y={TOP + PH / 2}
-          fill="#6b7280"
+          fill="#8eb8c0"
           fontSize="12"
           textAnchor="middle"
           transform={`rotate(-90 11 ${TOP + PH / 2})`}
@@ -139,14 +154,15 @@ export default function ConstellationPlot({
 
         {/* Legend */}
         <circle cx={LEFT + PW - 80} cy={TOP + PH - 16} r="5" fill="#93c5fd" fillOpacity="0.7" />
-        <text x={LEFT + PW - 72} y={TOP + PH - 12} fill="#374151" fontSize="11">
+        <text x={LEFT + PW - 72} y={TOP + PH - 12} fill="#8eb8c0" fontSize="11">
           All peaks ({visible.filter((p) => !p.matched).length})
         </text>
         <circle cx={LEFT + PW - 80} cy={TOP + PH - 2} r="5" fill="#fbbf24" stroke="#d97706" strokeWidth="1" />
-        <text x={LEFT + PW - 72} y={TOP + PH + 2} fill="#374151" fontSize="11">
+        <text x={LEFT + PW - 72} y={TOP + PH + 2} fill="#8eb8c0" fontSize="11">
           Matched ({visible.filter((p) => p.matched).length})
         </text>
       </svg>
+      </ChartCursor>
       <p className="chart-caption">
         {visible.length} of {peaks.length} peaks shown ·{" "}
         <span style={{ color: "#2563eb", fontWeight: 500 }}>blue</span> = detected peaks ·{" "}

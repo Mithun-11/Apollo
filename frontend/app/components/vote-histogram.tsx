@@ -1,6 +1,8 @@
 "use client";
 
-import type { OffsetVoteDisplay } from "../lib/api";
+import { memo, useState } from "react";
+import type { OffsetVoteDisplay } from "../../lib/api";
+import ChartCursor from "./chart-cursor";
 
 const MAX_RENDERED_BARS = 200;
 
@@ -17,7 +19,7 @@ function fmt(v: number): string {
   return `${v.toFixed(2)} s`;
 }
 
-export default function VoteHistogram({
+function VoteHistogram({
   votes,
   threshold,
   timestampSeconds,
@@ -29,6 +31,7 @@ export default function VoteHistogram({
   accepted?: boolean;
 }) {
   const visible = votes.slice(0, MAX_RENDERED_BARS);
+  const [hoveredOffset, setHoveredOffset] = useState<number | null>(null);
   if (visible.length === 0) {
     return (
       <div>
@@ -52,6 +55,15 @@ export default function VoteHistogram({
 
   return (
     <div>
+      <ChartCursor onHover={(x) => {
+        if (x === null) { setHoveredOffset(null); return; }
+        const offset = minOffset + Math.max(0, Math.min(1, (x * VW - LEFT) / PW)) * offsetRange;
+        setHoveredOffset(visible.reduce((best, vote) => Math.abs(vote.offsetSeconds - offset) < Math.abs(best.offsetSeconds - offset) ? vote : best, visible[0]).offsetSeconds);
+      }} describe={(x) => {
+        const offset = minOffset + Math.max(0, Math.min(1, (x * VW - LEFT) / PW)) * offsetRange;
+        const nearest = visible.reduce((best, vote) => Math.abs(vote.offsetSeconds - offset) < Math.abs(best.offsetSeconds - offset) ? vote : best, visible[0]);
+        return `${nearest.offsetSeconds.toFixed(2)} s · ${nearest.count} votes`;
+      }}>
       <svg
         className="vote-plot"
         viewBox={`0 0 ${VW} ${VH}`}
@@ -59,9 +71,9 @@ export default function VoteHistogram({
         aria-label="Time-offset vote histogram with winning offset highlighted"
       >
         {/* White background */}
-        <rect x="0" y="0" width={VW} height={VH} fill="#ffffff" rx="4" />
+        <rect x="0" y="0" width={VW} height={VH} fill="#0f1e24" rx="4" />
         {/* Plot area */}
-        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="#f9fafb" rx="2" />
+        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="#152830" rx="2" />
 
         {/* Horizontal grid lines */}
         {Array.from({ length: yTickCount + 1 }, (_, i) => {
@@ -70,8 +82,8 @@ export default function VoteHistogram({
           return (
             <g key={`yg-${i}`}>
               <line x1={LEFT} y1={y} x2={LEFT + PW} y2={y}
-                stroke="rgba(0,0,0,0.07)" strokeWidth="1" />
-              <text x={LEFT - 7} y={y + 4} fill="#374151" fontSize="11" textAnchor="end">
+                stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+              <text x={LEFT - 7} y={y + 4} fill="#8eb8c0" fontSize="11" textAnchor="end">
                 {count}
               </text>
             </g>
@@ -83,7 +95,7 @@ export default function VoteHistogram({
           const x = LEFT + ((vote.offsetSeconds - minOffset) / offsetRange) * PW;
           const barH = Math.max(1, (vote.count / maxCount) * PH);
           const fill = vote.winning ? "#fbbf24" : "#93c5fd";
-          const stroke = vote.winning ? "#d97706" : "#60a5fa";
+          const stroke = hoveredOffset === vote.offsetSeconds ? "#ffffff" : vote.winning ? "#d97706" : "#60a5fa";
           return (
             <g key={`${vote.offsetSeconds}-${vote.count}`}>
               <rect
@@ -136,7 +148,7 @@ export default function VoteHistogram({
         })()}
 
         {/* Border */}
-        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="none" stroke="#d1d5db" strokeWidth="1" rx="2" />
+        <rect x={LEFT} y={TOP} width={PW} height={PH} fill="none" stroke="#2c454d" strokeWidth="1" rx="2" />
 
         {/* X-axis ticks + labels */}
         {Array.from({ length: 6 }, (_, i) => {
@@ -144,8 +156,8 @@ export default function VoteHistogram({
           const x = LEFT + (i / 5) * PW;
           return (
             <g key={`xl-${i}`}>
-              <line x1={x} y1={TOP + PH} x2={x} y2={TOP + PH + 4} stroke="#9ca3af" strokeWidth="1" />
-              <text x={x} y={TOP + PH + 17} fill="#374151" fontSize="11" textAnchor="middle">
+              <line x1={x} y1={TOP + PH} x2={x} y2={TOP + PH + 4} stroke="#739ba3" strokeWidth="1" />
+              <text x={x} y={TOP + PH + 17} fill="#8eb8c0" fontSize="11" textAnchor="middle">
                 {fmt(t)}
               </text>
             </g>
@@ -153,13 +165,13 @@ export default function VoteHistogram({
         })}
 
         {/* Axis titles */}
-        <text x={LEFT + PW / 2} y={VH - 4} fill="#6b7280" fontSize="12" textAnchor="middle">
+        <text x={LEFT + PW / 2} y={VH - 4} fill="#8eb8c0" fontSize="12" textAnchor="middle">
           Candidate source offset (s)
         </text>
         <text
           x={11}
           y={TOP + PH / 2}
-          fill="#6b7280"
+          fill="#8eb8c0"
           fontSize="12"
           textAnchor="middle"
           transform={`rotate(-90 11 ${TOP + PH / 2})`}
@@ -167,6 +179,7 @@ export default function VoteHistogram({
           Aligned vote count
         </text>
       </svg>
+      </ChartCursor>
 
       <p className="chart-caption">
         {timestampSeconds === null
@@ -188,3 +201,5 @@ export default function VoteHistogram({
     </div>
   );
 }
+
+export default memo(VoteHistogram);

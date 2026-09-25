@@ -124,8 +124,22 @@ Speed edits alone from 0.80× to 1.30× were found 30/30 at every step tested.
   that the browser's mic indicator is on while the tab is visible, like a video call.
 - **Streaming early stop:** from 2 s, then about every 1 s, the frontend sends the **whole
   recording so far** (not just the last second) to `/recognize`. It stops when two consecutive
-  checks return the same song with timestamps within 0.25 s. The hard limit is 15 s. Then one
-  `/recognize/explain` call on the final clip feeds the explanation UI.
+  checks return the same song with timestamps within 0.25 s. For a likely unknown song, it also
+  stops after 6 s if two completed checks found no match, the latest checked at least 4 s of
+  audio, and no earlier check reported a possible match. Failed checks never count. The hard
+  limit remains 15 s for inconclusive or unavailable checks. Then one `/recognize/explain` call
+  on the final clip verifies the result and feeds the explanation UI. This shortens the common
+  unknown-song path; a long quiet intro that only becomes recognizable after 6 s may need a
+  second attempt from a later passage.
+- **Unknown-song latency (2026-09-24):** failed checks after 4 s invoke the 78-candidate
+  speed/pitch fallback, and the final explanation invokes it again. On the local six-song catalog,
+  a synthetic noise query took 5.43 s for a 10 s explanation and 9.00 s for a 15 s explanation
+  in an initial run (Windows laptop). A subsequent warm run took about 2 s for a 6 s clip.
+  The 10 s cutoff still felt slow; the negative-check stop is now 6 s, and the UI reports the
+  live no-match result while the final recording is verified. Real microphone recordings and
+  concurrent checks may differ; no matcher settings or thresholds changed. A request-scoped
+  database hash cache was measured and rejected because it increased the edit-search time from
+  2.17 s to 4.83 s on the same 10 s synthetic noise clip.
 - **Why the whole clip:** votes accumulate, pairs span up to 1.5 s, and every check shares the
   same start, so a real match repeats the same timestamp while a chance match does not. Server
   time per check is 0.04 s for 2 s of audio and about 0.2 s for 15 s.
@@ -141,6 +155,12 @@ Speed edits alone from 0.80× to 1.30× were found 30/30 at every step tested.
   toggle uses the local recording blob and synchronizes the recorded audio with the visual
   cursor. Each stage covers one pass through the clip; pause, seeking, stage changes, and sound-off
   stop the replay audio. This is presentation playback only and does not affect recognition.
+- **Frontend teaching tools (2026-09-24):** the microphone or tab stream also feeds a local
+  `AnalyserNode` for a live spectrum; it does not alter the recorded samples or API requests.
+  The recording screen preserves recognition-check history, and the explanation now opens on
+  demand with chart inspection, a measured vote verdict, and five lazy-loaded browser-only
+  demonstrations. Synthetic peaks, noise, and lookup animation are labeled illustrative; they
+  do not re-run recognition, compute catalog hashes, or imply a calibrated confidence probability.
 
 ## Catalog workflow
 

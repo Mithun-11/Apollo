@@ -7,8 +7,10 @@ const CANVAS_HEIGHT = 150;
 
 export default function LiveWaveform({
   samplesRef,
+  source,
 }: {
   samplesRef: RefObject<Float32Array>;
+  source: "microphone" | "tab";
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -24,7 +26,10 @@ export default function LiveWaveform({
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
 
     let animationFrame = 0;
-    const draw = () => {
+    let previous = 0;
+    const draw = (now: number) => {
+      if (now - previous < 1000 / 30) { animationFrame = window.requestAnimationFrame(draw); return; }
+      previous = now;
       context.fillStyle = "#0b1020";
       context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       context.strokeStyle = "#1f2937";
@@ -49,7 +54,7 @@ export default function LiveWaveform({
       animationFrame = window.requestAnimationFrame(draw);
     };
 
-    draw();
+    animationFrame = window.requestAnimationFrame(draw);
     return () => window.cancelAnimationFrame(animationFrame);
   }, [samplesRef]);
 
@@ -58,7 +63,7 @@ export default function LiveWaveform({
       ref={canvasRef}
       className="live-waveform"
       role="img"
-      aria-label="Live microphone waveform"
+      aria-label={`Live ${source === "tab" ? "browser tab" : "microphone"} waveform`}
     />
   );
 }

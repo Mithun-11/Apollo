@@ -7,12 +7,22 @@ import {
   type RecognitionExplanationResponse,
   type RecognitionResponse,
 } from "../lib/api";
-import LiveWaveform from "./live-waveform";
-import RecognitionExplanation from "./recognition-explanation";
+import LiveWaveform from "./components/live-waveform";
+import LiveSpectrum from "./components/live-spectrum";
+import CheckTimeline, { type CheckEvent } from "./components/check-timeline";
+import ConfidenceRing from "./components/confidence-ring";
+import ResultHero from "./components/result-hero";
+import VerdictSummary from "./components/verdict-summary";
+import AlgorithmLab from "./components/algorithm-lab";
+import RecognitionExplanation from "./components/recognition-explanation";
 
-// Listening stops as soon as two consecutive checks agree on the song and its position,
-// like Shazam; otherwise it stops at the maximum and recognizes whatever was captured.
+// Listening stops when two consecutive checks agree on the song and its position,
+// or after enough negative evidence; inconclusive recordings reach the maximum.
 const MAX_RECORDING_SECONDS = 15;
+// Two completed negative checks, including a full edit-search check, can end an
+// unknown-song recording sooner. The final clip is still verified by /explain.
+const NO_MATCH_RECORDING_SECONDS = 6;
+const MIN_NEGATIVE_CHECK_SECONDS = 4;
 const FIRST_CHECK_SECONDS = 2;
 const CHECK_INTERVAL_SECONDS = 1;
 const TIMER_TICK_MS = 250;
@@ -63,6 +73,7 @@ type Microphone = {
   context: AudioContext;
   source: MediaStreamAudioSourceNode;
   recorder: AudioWorkletNode;
+  analyser: AnalyserNode;
   silentOutput: GainNode;
 };
 
@@ -70,8 +81,6 @@ type RecordingSession = {
   finish: () => void;
   tickTimerId: number | null;
 };
-
-type CheckEvent = { seconds: number; text: string };
 
 function isConfirmedMatch(
   previous: RecognitionResponse | null,
@@ -159,6 +168,9 @@ async function openMicrophone(
       URL.revokeObjectURL(workletUrl);
     }
     const source = context.createMediaStreamSource(stream);
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.72;
     // Stereo tab audio is mixed down to mono; the microphone is already mono.
     const recorder = new AudioWorkletNode(context, "apollo-recorder", {
       channelCount: 1,
@@ -170,11 +182,12 @@ async function openMicrophone(
       onSamples(new Float32Array(event.data));
     };
     source.connect(recorder);
+    source.connect(analyser);
     recorder.connect(silentOutput);
     silentOutput.connect(context.destination);
     // Idle until Listen: a suspended context uses no CPU and resumes within milliseconds.
     await context.suspend();
-    return { stream, context, source, recorder, silentOutput };
+    return { stream, context, source, recorder, analyser, silentOutput };
   } catch (error) {
     stream.getTracks().forEach((track) => track.stop());
     await context.close();
@@ -193,6 +206,7 @@ async function closeMicrophone(microphone: Microphone): Promise<void> {
   microphone.recorder.port.onmessage = null;
   microphone.recorder.disconnect();
   microphone.recorder.port.close();
+  microphone.analyser.disconnect();
   microphone.silentOutput.disconnect();
   microphone.source.disconnect();
   microphone.stream.getTracks().forEach((track) => track.stop());
@@ -252,6 +266,7 @@ export default function Home() {
   const [volume, setVolume] = useState(0);
   const [checkMessage, setCheckMessage] = useState("Waiting for the first check at 2 seconds");
   const [checks, setChecks] = useState<CheckEvent[]>([]);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
   const chunks = useRef<Float32Array[]>([]);
   const liveSamplesRef = useRef<Float32Array>(new Float32Array(0));
   const sessionRef = useRef<RecordingSession | null>(null);
@@ -391,6 +406,7 @@ export default function Home() {
         });
       }
       await microphone.context.resume();
+      setAnalyser(microphone.analyser);
       chunks.current = [];
       liveSamplesRef.current = new Float32Array(0);
       capturing.current = true;
@@ -406,6 +422,10 @@ export default function Home() {
         let checkInFlight = false;
         let lastCheckSeconds = 0;
         let previousCheck: RecognitionResponse | null = null;
+        let consecutiveNoMatches = 0;
+        let sawPossibleMatch = false;
+        let lastCompletedCheckSeconds = 0;
+        let lastNegativeCheck: RecognitionResponse | null = null;
         const startedAt = performance.now();
         activeSession.finish = () => {
           if (resolved) return;
@@ -426,6 +446,17 @@ export default function Home() {
             return;
           }
           if (
+            !checkInFlight &&
+            elapsedSeconds >= NO_MATCH_RECORDING_SECONDS &&
+            !sawPossibleMatch &&
+            consecutiveNoMatches >= 2 &&
+            lastCompletedCheckSeconds >= MIN_NEGATIVE_CHECK_SECONDS
+          ) {
+            confirmedRecognition = lastNegativeCheck;
+            activeSession.finish();
+            return;
+          }
+          if (
             checkInFlight ||
             elapsedSeconds < FIRST_CHECK_SECONDS ||
             elapsedSeconds - lastCheckSeconds < CHECK_INTERVAL_SECONDS
@@ -439,10 +470,31 @@ export default function Home() {
             .then((response) => {
               if (!capturing.current || unmounted.current) return;
               const confirmed = isConfirmedMatch(previousCheck, response);
+              lastCompletedCheckSeconds = elapsedSeconds;
+              if (response.matched) {
+                sawPossibleMatch = true;
+                consecutiveNoMatches = 0;
+              } else {
+                consecutiveNoMatches += 1;
+                lastNegativeCheck = response;
+              }
               const text = confirmed ? "Stable match confirmed" : response.matched ? "Possible match; checking again" : "No stable match yet";
               setCheckMessage(text);
-              setChecks((current) => [...current, { seconds: elapsedSeconds, text }].slice(-4));
+              setChecks((current) => {
+                const marked = confirmed && current.length > 0
+                  ? [...current.slice(0, -1), { ...current[current.length - 1], status: "confirmed" as const }]
+                  : current;
+                return [...marked, { seconds: elapsedSeconds, status: confirmed ? "confirmed" : response.matched ? "possible" : "none", songName: response.song?.name ?? null }];
+              });
               if (confirmed) {
+                confirmedRecognition = response;
+                activeSession.finish();
+              } else if (
+                !sawPossibleMatch &&
+                consecutiveNoMatches >= 2 &&
+                lastCompletedCheckSeconds >= MIN_NEGATIVE_CHECK_SECONDS &&
+                (performance.now() - startedAt) / 1000 >= NO_MATCH_RECORDING_SECONDS
+              ) {
                 confirmedRecognition = response;
                 activeSession.finish();
               }
@@ -451,6 +503,7 @@ export default function Home() {
             .catch(() => {
               // A failed early check only delays the answer; the final request reports errors.
               previousCheck = null;
+              consecutiveNoMatches = 0;
               if (capturing.current && !unmounted.current) setCheckMessage("Check unavailable; continuing to listen");
             })
             .finally(() => {
@@ -488,6 +541,7 @@ export default function Home() {
       }
     } finally {
       capturing.current = false;
+      if (!unmounted.current) setAnalyser(null);
       if (requestedSource === "tab") {
         keeper.release();
         microphone = null;
@@ -521,11 +575,13 @@ export default function Home() {
           ? "Choose the tab playing the song and turn on “Share tab audio”…"
           : "Starting microphone…"
         : state.phase === "recording"
-          ? `Listening… ${state.elapsedSeconds}s (stops automatically once the song is recognized)`
+          ? `Listening… ${state.elapsedSeconds}s (checking for a stable match)`
           : state.phase === "processing"
-            ? state.recognition
+            ? state.recognition?.matched
               ? "Match found · loading the explanation…"
-              : "Recognizing and explaining…"
+              : state.recognition
+                ? "No match in live checks · verifying the recording…"
+                : "Recognizing and explaining…"
             : state.phase === "complete"
               ? state.response.recognition.matched
                 ? "Match found"
@@ -565,6 +621,7 @@ export default function Home() {
               ? "🔊 Listen"
               : "🎙 Listen"}
         </button>
+        {state.phase === "recording" && <ConfidenceRing elapsed={state.elapsedSeconds} max={MAX_RECORDING_SECONDS} confirmation={checks.at(-1)?.status === "confirmed" ? 100 : checks.at(-1)?.status === "possible" ? 50 : 0} />}
         {state.phase === "recording" ? (
           <button className="secondary-button" type="button" onClick={stopRecording}>
             Stop and recognize now
@@ -574,12 +631,13 @@ export default function Home() {
         {state.phase === "recording" ? (
           <div className="live-input">
             <div className="live-head"><span>{source === "tab" ? "LIVE BROWSER TAB SIGNAL" : "LIVE MICROPHONE SIGNAL"}</span><strong>{state.elapsedSeconds}s / {MAX_RECORDING_SECONDS}s</strong></div>
-            <LiveWaveform samplesRef={liveSamplesRef} />
+            <div className="live-graphs"><div><p>Waveform</p><LiveWaveform samplesRef={liveSamplesRef} source={source} /></div><div><p>Frequency spectrum</p>{analyser && <LiveSpectrum analyser={analyser} />}</div></div>
             <div className="live-progress" role="progressbar" aria-label="Recording duration" aria-valuenow={state.elapsedSeconds} aria-valuemin={0} aria-valuemax={MAX_RECORDING_SECONDS}><span style={{ width: `${Math.min(100, state.elapsedSeconds / MAX_RECORDING_SECONDS * 100)}%` }} /></div>
             <p className="volume-label">Input level: {Math.round(Math.min(1, volume) * 100)}% · {checkMessage}</p>
-            {checks.length > 0 && <ol className="check-list" aria-label="Recent recognition checks">{checks.map((check, index) => <li key={`${check.seconds}-${index}`}><time>{check.seconds.toFixed(1)}s</time><span>{check.text}</span></li>)}</ol>}
           </div>
         ) : null}
+        {checks.length > 0 && <div className="check-timeline-panel"><p className="result-label">Recognition checks</p><CheckTimeline checks={checks} duration={MAX_RECORDING_SECONDS} /></div>}
+        {state.phase === "processing" && <div className="processing-skeleton" aria-hidden="true"><span /><span /><span /></div>}
         {playbackUrl ? (
           <div className="playback">
             <p className="result-label">Your local recording</p>
@@ -587,42 +645,12 @@ export default function Home() {
           </div>
         ) : null}
 
-        {recognition?.matched && recognition.song ? (
-          <div className="result" aria-live="polite">
-            <p className="result-label">
-              Found at {formatTimestamp(recognition.timestampSeconds)}
-            </p>
-            <h2>{recognition.song.name}</h2>
-            {describeEdit(recognition) ? (
-              <p className="result-label">{describeEdit(recognition)}</p>
-            ) : null}
-            <a href={recognition.song.spotifyUrl} target="_blank" rel="noreferrer">
-              Open in Spotify
-            </a>
-          </div>
-        ) : null}
+        {recognition?.matched && recognition.song ? <ResultHero recognition={recognition} explanation={result?.explanation ?? null} /> : null}
+        {result && <VerdictSummary response={result} />}
 
         {result && playbackUrl ? <RecognitionExplanation response={result} recordingUrl={playbackUrl} /> : null}
+        {result && <AlgorithmLab explanation={result.explanation} />}
       </section>
     </main>
   );
-}
-
-function describeEdit({ speedFactor, pitchFactor }: RecognitionResponse): string | null {
-  if (speedFactor && Math.abs(speedFactor - 1) >= 0.02) {
-    const kind = speedFactor > 1 ? "sped up" : "slowed down";
-    return `Detected edit: ${kind} (played at ${speedFactor.toFixed(2)}×)`;
-  }
-  if (pitchFactor && Math.abs(pitchFactor - 1) >= 0.02) {
-    const semitones = 12 * Math.log2(pitchFactor);
-    const kind = semitones > 0 ? "raised" : "lowered";
-    return `Detected edit: pitch ${kind} ${Math.abs(semitones).toFixed(1)} semitones`;
-  }
-  return null;
-}
-
-function formatTimestamp(seconds: number | null): string {
-  if (seconds === null) return "an unknown timestamp";
-  const total = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }

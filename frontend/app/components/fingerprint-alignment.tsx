@@ -1,6 +1,7 @@
 "use client";
 
-import type { MatchedFingerprintDisplay } from "../lib/api";
+import type { MatchedFingerprintDisplay, WaveformEnvelopePoint } from "../../lib/api";
+import ChartCursor from "./chart-cursor";
 
 const MAX_RENDERED_MATCHES = 300;
 
@@ -27,11 +28,13 @@ export default function FingerprintAlignment({
   queryDurationSeconds,
   sourceInterval,
   cursorSeconds,
+  waveformEnvelope,
 }: {
   matches: MatchedFingerprintDisplay[];
   queryDurationSeconds: number;
   sourceInterval: { startSeconds: number; endSeconds: number } | null;
   cursorSeconds?: number;
+  waveformEnvelope?: WaveformEnvelopePoint[];
 }) {
   const visible = matches.slice(0, MAX_RENDERED_MATCHES);
   const queryDuration = queryDurationSeconds || 1;
@@ -53,6 +56,7 @@ export default function FingerprintAlignment({
 
   return (
     <div>
+      <ChartCursor describe={(x, y) => `${(Math.max(0, Math.min(1, (x * VW - LEFT) / PW)) * (y < .5 ? queryDurationSeconds : sourceEnd - sourceStart) + (y < .5 ? 0 : sourceStart)).toFixed(2)} s · ${y < .5 ? "recording" : "catalog song"}`}>
       <svg
         className="alignment-plot"
         viewBox={`0 0 ${VW} ${VH}`}
@@ -60,32 +64,35 @@ export default function FingerprintAlignment({
         aria-label="Matched fingerprints aligned between query and source song timelines"
       >
         {/* White background */}
-        <rect x="0" y="0" width={VW} height={VH} fill="#ffffff" rx="4" />
+        <rect x="0" y="0" width={VW} height={VH} fill="#0f1e24" rx="4" />
 
         {/* ── Section labels ─────────────────────────────────── */}
-        <text x={LEFT - 8} y={QUERY_Y - 30} fill="#374151" fontSize="13" fontWeight="700" textAnchor="end">
+        <text x={LEFT - 8} y={QUERY_Y - 30} fill="#8eb8c0" fontSize="13" fontWeight="700" textAnchor="end">
           Query
         </text>
-        <text x={LEFT - 8} y={SONG_Y - 30} fill="#374151" fontSize="13" fontWeight="700" textAnchor="end">
+        <text x={LEFT - 8} y={SONG_Y - 30} fill="#8eb8c0" fontSize="13" fontWeight="700" textAnchor="end">
           Song
         </text>
 
         {/* ── Query timeline band ─────────────────────────────── */}
         <rect x={LEFT} y={QUERY_Y - 14} width={PW} height={28}
-          fill="#eff6ff" stroke="#bfdbfe" strokeWidth="1.5" rx="6" />
-        <text x={LEFT} y={QUERY_Y + 34} fill="#6b7280" fontSize="11" textAnchor="start">0 s</text>
-        <text x={LEFT + PW} y={QUERY_Y + 34} fill="#6b7280" fontSize="11" textAnchor="end">
+          fill="#1a3844" stroke="#6cb8c9" strokeWidth="1.5" rx="6" />
+        {waveformEnvelope && waveformEnvelope.length > 0 && <path d={waveformEnvelope.map((point, index) => `${index === 0 ? "M" : "L"}${LEFT + point.timeSeconds / queryDuration * PW},${QUERY_Y - point.maximum * 11}`).join(" ") + " " + [...waveformEnvelope].reverse().map((point) => `L${LEFT + point.timeSeconds / queryDuration * PW},${QUERY_Y - point.minimum * 11}`).join(" ") + " Z"} fill="#82d5df" opacity=".8" />}
+        <text x={LEFT} y={QUERY_Y + 34} fill="#8eb8c0" fontSize="11" textAnchor="start">0 s</text>
+        <text x={LEFT + PW} y={QUERY_Y + 34} fill="#8eb8c0" fontSize="11" textAnchor="end">
           {fmt(queryDurationSeconds)}
         </text>
         {cursorSeconds !== undefined && <line x1={LEFT + clamp(cursorSeconds / queryDuration) * PW} x2={LEFT + clamp(cursorSeconds / queryDuration) * PW} y1={QUERY_Y - 31} y2={QUERY_Y + 20} stroke="#087f8b" strokeWidth="2.5" />}
 
         {/* ── Song timeline band ──────────────────────────────── */}
         <rect x={LEFT} y={SONG_Y - 14} width={PW} height={28}
-          fill="#fef3c7" stroke="#fcd34d" strokeWidth="1.5" rx="6" />
-        <text x={LEFT} y={SONG_Y + 34} fill="#6b7280" fontSize="11" textAnchor="start">
+          fill="#473a23" stroke="#fcd34d" strokeWidth="1.5" rx="6" />
+        <rect x={LEFT + 3} y={SONG_Y - 8} width={PW - 6} height={16} fill="url(#song-segment-gradient)" rx="4" />
+        <defs><linearGradient id="song-segment-gradient"><stop stopColor="#665234" /><stop offset=".5" stopColor="#e7aa59" /><stop offset="1" stopColor="#665234" /></linearGradient></defs>
+        <text x={LEFT} y={SONG_Y + 34} fill="#8eb8c0" fontSize="11" textAnchor="start">
           {fmt(sourceStart)}
         </text>
-        <text x={LEFT + PW} y={SONG_Y + 34} fill="#6b7280" fontSize="11" textAnchor="end">
+        <text x={LEFT + PW} y={SONG_Y + 34} fill="#8eb8c0" fontSize="11" textAnchor="end">
           {fmt(sourceEnd)}
         </text>
         {cursorSeconds !== undefined && <line x1={LEFT + clamp(cursorSeconds / queryDuration) * PW} x2={LEFT + clamp(cursorSeconds / queryDuration) * PW} y1={SONG_Y - 31} y2={SONG_Y + 20} stroke="#d97706" strokeWidth="2.5" />}
@@ -140,10 +147,11 @@ export default function FingerprintAlignment({
         })}
 
         {/* ── Axis title ──────────────────────────────────────── */}
-        <text x={VW / 2} y={VH - 6} fill="#9ca3af" fontSize="11" textAnchor="middle">
+        <text x={VW / 2} y={VH - 6} fill="#739ba3" fontSize="11" textAnchor="middle">
           Time axis — Query: 0 … {fmt(queryDurationSeconds)} · Song: {fmt(sourceStart)} … {fmt(sourceEnd)}
         </text>
       </svg>
+      </ChartCursor>
 
       <p className="chart-caption">
         {visible.length} matched fingerprint pairs shown ·{" "}

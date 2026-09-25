@@ -11,7 +11,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "Apollo — Song Recognition",
-  description: "Recognize nearby songs from a short microphone recording and explore the signal pipeline.",
+  description: "Recognize songs from a microphone or browser tab and explore the signal processing behind each result.",
 };
 
 export default function RootLayout({

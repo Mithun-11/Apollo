@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { SpectrogramDisplay } from "../lib/api";
+import type { PeakDisplay, SpectrogramDisplay } from "../../lib/api";
+import ChartCursor from "./chart-cursor";
 
 const CANVAS_WIDTH  = 900;
 const CANVAS_HEIGHT = 420;
@@ -10,56 +11,25 @@ const PLOT_TOP      = 18;
 const PLOT_RIGHT    = 18;
 const PLOT_BOTTOM   = 44;
 
-/**
- * Viridis-inspired color map on a white background.
- * intensity 0 = quietest → light gray
- * intensity 1 = loudest  → deep indigo/blue
- */
 function colorFor(value: number, minimum: number, maximum: number): [number, number, number] {
   const range = maximum - minimum || 1;
   const t = Math.max(0, Math.min(1, (value - minimum) / range));
-
-  // Viridis: dark purple → blue → teal → green → yellow
-  // We use a 5-stop approximation on white bg (reversed so loud = dark)
-  if (t < 0.25) {
-    const s = t / 0.25;
-    return [
-      Math.round(240 - s * 30),
-      Math.round(240 - s * 40),
-      Math.round(240 - s * 10),
-    ];
-  } else if (t < 0.5) {
-    const s = (t - 0.25) / 0.25;
-    return [
-      Math.round(210 - s * 80),
-      Math.round(200 - s * 70),
-      Math.round(230 - s * 20),
-    ];
-  } else if (t < 0.75) {
-    const s = (t - 0.5) / 0.25;
-    return [
-      Math.round(130 - s * 80),
-      Math.round(130 - s * 70),
-      Math.round(210 + s * 10),
-    ];
-  } else {
-    const s = (t - 0.75) / 0.25;
-    return [
-      Math.round(50  - s * 30),
-      Math.round(60  - s * 40),
-      Math.round(220 - s * 60),
-    ];
-  }
+  const stops = [[15, 8, 32], [74, 20, 91], [151, 39, 89], [232, 88, 47], [255, 221, 135]];
+  const index = Math.min(3, Math.floor(t * 4));
+  const blend = t * 4 - index;
+  return [0, 1, 2].map((channel) => Math.round(stops[index][channel] * (1 - blend) + stops[index + 1][channel] * blend)) as [number, number, number];
 }
 
 export default function SpectrogramCanvas({
   spectrogram,
   cursorSeconds,
   frequencyBand,
+  overlayPeaks,
 }: {
   spectrogram: SpectrogramDisplay;
   cursorSeconds?: number;
   frequencyBand?: { minimum: number; maximum: number };
+  overlayPeaks?: PeakDisplay[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -74,14 +44,14 @@ export default function SpectrogramCanvas({
     if (!ctx) return;
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
 
-    // White background
-    ctx.fillStyle = "#ffffff";
+    // Dark chart background
+    ctx.fillStyle = "#0f1e24";
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
     // Plot area background
     const plotW = CANVAS_WIDTH  - PLOT_LEFT - PLOT_RIGHT;
     const plotH = CANVAS_HEIGHT - PLOT_TOP  - PLOT_BOTTOM;
-    ctx.fillStyle = "#f9fafb";
+    ctx.fillStyle = "#152830";
     ctx.fillRect(PLOT_LEFT, PLOT_TOP, plotW, plotH);
 
     const rows    = spectrogram.valuesDb.length;
@@ -105,14 +75,25 @@ export default function SpectrogramCanvas({
         }
       }
     } else {
-      ctx.fillStyle = "#6b7280";
+      ctx.fillStyle = "#8eb8c0";
       ctx.font = "14px Inter, sans-serif";
       ctx.fillText("No spectrogram data available.", PLOT_LEFT + 16, PLOT_TOP + 36);
     }
 
+    if (overlayPeaks) {
+      for (const peak of overlayPeaks.slice(0, 1000)) {
+        const x = PLOT_LEFT + peak.timeSeconds / Math.max(spectrogram.durationSeconds, .001) * plotW;
+        const y = PLOT_TOP + (1 - peak.frequencyHz / Math.max(spectrogram.maximumFrequencyHz, 1)) * plotH;
+        ctx.beginPath();
+        ctx.fillStyle = peak.matched ? "#f7c66d" : "#88e2e0";
+        ctx.arc(x, y, peak.matched ? 3.7 : 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     // Grid lines (frequency)
     const freqTickCount = 6;
-    ctx.strokeStyle = "rgba(0,0,0,0.1)";
+    ctx.strokeStyle = "rgba(255,255,255,0.07)";
     ctx.lineWidth = 1;
     for (let i = 0; i <= freqTickCount; i++) {
       const y = PLOT_TOP + (i / freqTickCount) * plotH;
@@ -133,12 +114,12 @@ export default function SpectrogramCanvas({
     }
 
     // Border
-    ctx.strokeStyle = "#d1d5db";
+    ctx.strokeStyle = "#2c454d";
     ctx.lineWidth = 1;
     ctx.strokeRect(PLOT_LEFT, PLOT_TOP, plotW, plotH);
 
     // Axis labels — time
-    ctx.fillStyle = "#374151";
+    ctx.fillStyle = "#8eb8c0";
     ctx.font = "11px Inter, sans-serif";
     ctx.textAlign = "center";
     for (let i = 0; i <= timeTickCount; i++) {
@@ -146,7 +127,7 @@ export default function SpectrogramCanvas({
       const x = PLOT_LEFT + (i / timeTickCount) * plotW;
       ctx.fillText(`${t.toFixed(1)}s`, x, CANVAS_HEIGHT - 8);
       // tick
-      ctx.strokeStyle = "#9ca3af";
+      ctx.strokeStyle = "#739ba3";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, PLOT_TOP + plotH);
@@ -162,11 +143,11 @@ export default function SpectrogramCanvas({
       const label = freqHz >= 1000
         ? `${(freqHz / 1000).toFixed(1)}k`
         : `${Math.round(freqHz)}`;
-      ctx.fillStyle = "#374151";
+      ctx.fillStyle = "#8eb8c0";
       ctx.font = "11px Inter, sans-serif";
       ctx.fillText(label, PLOT_LEFT - 6, y + 4);
       // tick
-      ctx.strokeStyle = "#9ca3af";
+      ctx.strokeStyle = "#739ba3";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(PLOT_LEFT - 4, y);
@@ -175,7 +156,7 @@ export default function SpectrogramCanvas({
     }
 
     // Axis titles
-    ctx.fillStyle = "#6b7280";
+    ctx.fillStyle = "#8eb8c0";
     ctx.font = "11px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("Time (s)", PLOT_LEFT + plotW / 2, CANVAS_HEIGHT - 1);
@@ -193,27 +174,34 @@ export default function SpectrogramCanvas({
     const barH   = plotH;
     const barTop = PLOT_TOP;
     const grad = ctx.createLinearGradient(0, barTop + barH, 0, barTop);
-    grad.addColorStop(0, "rgb(240,240,240)");
-    grad.addColorStop(0.33, "rgb(130,130,210)");
-    grad.addColorStop(0.66, "rgb(50,60,220)");
-    grad.addColorStop(1, "rgb(20,20,160)");
+    grad.addColorStop(0, "rgb(15,8,32)");
+    grad.addColorStop(0.33, "rgb(108,26,91)");
+    grad.addColorStop(0.66, "rgb(218,76,58)");
+    grad.addColorStop(1, "rgb(255,221,135)");
     ctx.fillStyle = grad;
     ctx.fillRect(barX, barTop, barW, barH);
-    ctx.strokeStyle = "#d1d5db";
+    ctx.strokeStyle = "#2c454d";
     ctx.lineWidth = 1;
     ctx.strokeRect(barX, barTop, barW, barH);
 
-    ctx.fillStyle = "#6b7280";
+    ctx.fillStyle = "#8eb8c0";
     ctx.font = "10px Inter, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(`${spectrogram.maximumDb} dB`, barX + barW + 3, barTop + 10);
     ctx.fillText(`${spectrogram.minimumDb} dB`, barX + barW + 3, barTop + barH);
 
-  }, [spectrogram]);
+  }, [spectrogram, overlayPeaks]);
 
   return (
     <figure className="chart-figure">
-      <div className="spectrogram-frame">
+      <ChartCursor describe={(x, y) => {
+        const plotX = Math.max(0, Math.min(0.999, (x * CANVAS_WIDTH - PLOT_LEFT) / (CANVAS_WIDTH - PLOT_LEFT - PLOT_RIGHT)));
+        const plotY = Math.max(0, Math.min(0.999, (y * CANVAS_HEIGHT - PLOT_TOP) / (CANVAS_HEIGHT - PLOT_TOP - PLOT_BOTTOM)));
+        const row = Math.floor((1 - plotY) * spectrogram.valuesDb.length);
+        const column = Math.floor(plotX * (spectrogram.valuesDb[0]?.length ?? 0));
+        const db = spectrogram.valuesDb[Math.min(row, spectrogram.valuesDb.length - 1)]?.[column];
+        return `${(plotX * spectrogram.durationSeconds).toFixed(2)} s · ${Math.round((1 - plotY) * spectrogram.maximumFrequencyHz)} Hz${db === undefined ? "" : ` · ${db.toFixed(1)} dB`}`;
+      }}><div className="spectrogram-frame">
         <canvas
           ref={canvasRef}
           className="spectrogram-canvas"
@@ -227,11 +215,11 @@ export default function SpectrogramCanvas({
           right: `${PLOT_RIGHT / CANVAS_WIDTH * 100}%`,
         }} aria-hidden="true" />}
         {cursorSeconds !== undefined && <span className="spectrogram-cursor" style={{ left: `${(PLOT_LEFT + Math.min(1, cursorSeconds / Math.max(spectrogram.durationSeconds, .001)) * (CANVAS_WIDTH - PLOT_LEFT - PLOT_RIGHT)) / CANVAS_WIDTH * 100}%` }} aria-hidden="true" />}
-      </div>
+      </div></ChartCursor>
       <p className="chart-caption">
         Duration: {spectrogram.durationSeconds.toFixed(2)} s · Max frequency:{" "}
         {Math.round(spectrogram.maximumFrequencyHz).toLocaleString()} Hz ·
-        Darker = louder (dB scale from {spectrogram.minimumDb} to {spectrogram.maximumDb} dB)
+        Brighter = louder (dB scale from {spectrogram.minimumDb} to {spectrogram.maximumDb} dB)
         {frequencyBand && ` · Peak search band: ${frequencyBand.minimum}–${frequencyBand.maximum.toLocaleString()} Hz`}
       </p>
     </figure>

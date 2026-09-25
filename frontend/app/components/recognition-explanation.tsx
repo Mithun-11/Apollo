@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { PairExample, RecognitionExplanationResponse, WaveformEnvelopePoint } from "../lib/api";
+import type { PairExample, RecognitionExplanationResponse, WaveformEnvelopePoint } from "../../lib/api";
 import ConstellationPlot from "./constellation-plot";
 import FingerprintAlignment from "./fingerprint-alignment";
 import SpectrogramCanvas from "./spectrogram-canvas";
 import VoteHistogram from "./vote-histogram";
+import ChartCursor from "./chart-cursor";
 
 const STEPS = ["Capture", "Spectrum", "Peaks", "Fingerprints", "Catalog", "Alignment", "Decision"] as const;
 const seconds = (value: number) => `${value.toFixed(2)} s`;
@@ -29,17 +30,23 @@ function WaveformEnvelope({ points, duration, cursor }: { points: WaveformEnvelo
   const bottom = [...points].reverse().map((point) => `L ${x(point.timeSeconds)} ${y(point.minimum)}`).join(" ");
   return (
     <figure className="chart-figure">
+      <ChartCursor describe={(position) => {
+        const time = Math.max(0, Math.min(1, (position * 760 - 28) / 700)) * duration;
+        const nearest = points.reduce<WaveformEnvelopePoint | null>((best, point) => !best || Math.abs(point.timeSeconds - time) < Math.abs(best.timeSeconds - time) ? point : best, null);
+        return `${time.toFixed(2)} s${nearest ? ` · amplitude ${nearest.minimum.toFixed(2)} to ${nearest.maximum.toFixed(2)}` : " · no waveform data"}`;
+      }}>
       <svg className="waveform-plot" viewBox="0 0 760 218" role="img" aria-label="Normalized waveform of the recorded query">
-        <rect width="760" height="218" rx="12" fill="#f7f8f8" />
-        <line x1="28" x2="728" y1="100" y2="100" stroke="#cbd5d9" />
+        <rect width="760" height="218" rx="12" fill="#0f1e24" />
+        <line x1="28" x2="728" y1="100" y2="100" stroke="#46666c" />
         {points.length > 0 && <path d={`${top} ${bottom} Z`} fill="#a8dee2" opacity=".7" />}
         <path d={top} fill="none" stroke="#087f8b" strokeWidth="1.5" />
         <line x1={x(cursor)} x2={x(cursor)} y1="21" y2="177" stroke="#ca8933" strokeWidth="2" />
         <circle cx={x(cursor)} cy="100" r="5" fill="#ca8933" />
-        <text x="28" y="197" fill="#52646b" fontSize="12">0 s</text>
-        <text x="728" y="197" textAnchor="end" fill="#52646b" fontSize="12">{seconds(duration)}</text>
-        <text x="380" y="197" textAnchor="middle" fill="#52646b" fontSize="12">Time · amplitude −1 to +1</text>
+        <text x="28" y="197" fill="#9bc2c8" fontSize="12">0 s</text>
+        <text x="728" y="197" textAnchor="end" fill="#9bc2c8" fontSize="12">{seconds(duration)}</text>
+        <text x="380" y="197" textAnchor="middle" fill="#9bc2c8" fontSize="12">Time · amplitude −1 to +1</text>
       </svg>
+      </ChartCursor>
       <figcaption className="chart-caption">{points.length} displayed envelope regions from the normalized recording.</figcaption>
     </figure>
   );
@@ -52,21 +59,23 @@ function PairPlot({ pairs, duration, maximumFrequency, cursor }: { pairs: PairEx
   const y = (frequency: number) => 298 - frequency / Math.max(maximumFrequency, 1) * 266;
   return (
     <figure className="chart-figure">
+      <ChartCursor describe={(position, vertical) => `${(Math.max(0, Math.min(1, (position * 760 - 48) / 672)) * duration).toFixed(2)} s · ${Math.round(Math.max(0, Math.min(1, (298 - vertical * 340) / 266)) * maximumFrequency)} Hz`}>
       <svg className="pair-plot" viewBox="0 0 760 340" role="img" aria-label="Actual anchor and target peak pairs from this recording">
-        <rect width="760" height="340" rx="12" fill="#f7f8f8" />
-        <rect x="48" y="32" width="672" height="266" fill="#fff" stroke="#d9e3e5" />
+        <rect width="760" height="340" rx="12" fill="#0f1e24" />
+        <rect x="48" y="32" width="672" height="266" fill="#152830" stroke="#31515a" />
         {pairs.map((pair, index) => (
-          <g key={`${pair.anchorSeconds}-${pair.targetSeconds}-${index}`} opacity={pair === selected ? 1 : .28}>
+          <g key={`${pair.anchorSeconds}-${pair.targetSeconds}-${index}`} className={pair === selected ? "pair-active" : ""} opacity={pair === selected ? 1 : .28}>
             <line x1={x(pair.anchorSeconds)} y1={y(pair.anchorFrequencyHz)} x2={x(pair.targetSeconds)} y2={y(pair.targetFrequencyHz)} stroke={pair === selected ? "#c5802b" : "#087f8b"} strokeWidth={pair === selected ? 3 : 1.5} />
             <circle cx={x(pair.anchorSeconds)} cy={y(pair.anchorFrequencyHz)} r={pair === selected ? 6 : 3} fill="#087f8b" />
             <circle cx={x(pair.targetSeconds)} cy={y(pair.targetFrequencyHz)} r={pair === selected ? 6 : 3} fill="#c5802b" />
           </g>
         ))}
-        <text x="48" y="324" fill="#52646b" fontSize="12">0 s</text>
-        <text x="720" y="324" textAnchor="end" fill="#52646b" fontSize="12">{seconds(duration)}</text>
-        <text x="48" y="24" fill="#52646b" fontSize="12">{Math.round(maximumFrequency).toLocaleString()} Hz</text>
+        <text x="48" y="324" fill="#9bc2c8" fontSize="12">0 s</text>
+        <text x="720" y="324" textAnchor="end" fill="#9bc2c8" fontSize="12">{seconds(duration)}</text>
+        <text x="48" y="24" fill="#9bc2c8" fontSize="12">{Math.round(maximumFrequency).toLocaleString()} Hz</text>
       </svg>
-      <div className="fingerprint-formula" aria-label="Fingerprint ingredients"><span>{Math.round(selected.anchorFrequencyHz)} Hz anchor</span><b>+</b><span>{Math.round(selected.targetFrequencyHz)} Hz target</span><b>+</b><span>Δ {selected.deltaFrames} frames</span><b>→</b><strong>versioned fingerprint</strong></div>
+      </ChartCursor>
+      <div className="fingerprint-formula" key={`${selected.anchorSeconds}-${selected.targetSeconds}`} aria-label="Fingerprint ingredients"><span>{Math.round(selected.anchorFrequencyHz)} Hz anchor</span><b>+</b><span>{Math.round(selected.targetFrequencyHz)} Hz target</span><b>+</b><span>Δ {selected.deltaFrames} frames</span><b>→</b><strong>versioned fingerprint</strong></div>
       <figcaption className="chart-caption">Example: {Math.round(selected.anchorFrequencyHz)} Hz at {seconds(selected.anchorSeconds)} → {Math.round(selected.targetFrequencyHz)} Hz at {seconds(selected.targetSeconds)} · Δ {selected.deltaFrames} frames. {pairs.length} representative pairs shown.</figcaption>
     </figure>
   );
@@ -80,8 +89,12 @@ export default function RecognitionExplanation({ response, recordingUrl }: { res
   const [soundError, setSoundError] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
   const [showTechnical, setShowTechnical] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [overlayPeaks, setOverlayPeaks] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const firstStepRef = useRef<HTMLButtonElement>(null);
+  const mobileStepRef = useRef<HTMLSelectElement>(null);
   const progressRef = useRef(0);
   const lastAudioTimeRef = useRef(0);
   const stepDuration = Math.max(explanation.queryDurationSeconds, 0.1);
@@ -90,6 +103,8 @@ export default function RecognitionExplanation({ response, recordingUrl }: { res
   const actuallyPlaying = playing && progress < totalDuration - 0.001;
   const cursor = Math.min(explanation.queryDurationSeconds, progress % stepDuration);
   const config = explanation.signalConfig;
+
+  useEffect(() => { if (expanded) { if (window.matchMedia("(max-width: 640px)").matches) mobileStepRef.current?.focus(); else firstStepRef.current?.focus(); } }, [expanded]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -109,7 +124,9 @@ export default function RecognitionExplanation({ response, recordingUrl }: { res
     if (!actuallyPlaying || reducedMotion) return;
     let frame = 0;
     let last = 0;
+    const frameInterval = navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4 ? 1000 / 30 : 1000 / 60;
     const tick = (now: number) => {
+      if (last && now - last < frameInterval) { frame = window.requestAnimationFrame(tick); return; }
       const audio = audioRef.current;
       let next = progressRef.current;
       if (soundEnabled && audio && !audio.paused) {
@@ -213,6 +230,7 @@ export default function RecognitionExplanation({ response, recordingUrl }: { res
     { summary: decisionText(explanation.decision.reason), measure: `${explanation.decision.leadingVotes} leading votes · ${explanation.decision.runnerUpVotes} best other song`, technical: `A match requires at least ${explanation.decision.minimumVotes} votes and ${explanation.decision.minimumWinnerRatio}× the best other song. Votes within ±${explanation.decision.offsetToleranceFrames} frame are combined. The chart shows clustered votes for the leading song.` },
   ];
   const detail = descriptions[step];
+  const lookupFraction = actuallyPlaying && step === 4 ? Math.min(1, cursor / stepDuration) : 1;
 
   return (
     <section className="story" aria-labelledby="story-title">
@@ -221,21 +239,25 @@ export default function RecognitionExplanation({ response, recordingUrl }: { res
         <div><p className="eyebrow">THE SIGNAL STORY · REPLAY OF THIS RECORDING</p><h2 id="story-title">See how Apollo reached its answer.</h2><p>Explore each step or play the guided sequence. Every visual uses evidence from your recording.</p></div>
         <div className={`story-verdict ${recognition.matched ? "story-verdict--match" : ""}`}><span>{recognition.matched ? "MATCH FOUND" : "NO MATCH"}</span><strong>{recognition.song?.name ?? "Evidence was insufficient"}</strong>{recognition.timestampSeconds !== null && <small>Starting at {seconds(recognition.timestampSeconds)} in the song</small>}</div>
       </div>
-      <nav className="story-steps" aria-label="Recognition stages">{STEPS.map((title, index) => <button key={title} type="button" className={`story-step ${step === index ? "story-step--active" : ""}`} onClick={() => goTo(index)} aria-current={step === index ? "step" : undefined}><span>{String(index + 1).padStart(2, "0")}</span>{title}</button>)}</nav>
+      <button type="button" className="story-expand" onClick={() => { if (expanded) { audioRef.current?.pause(); setPlaying(false); } setExpanded(!expanded); }} aria-expanded={expanded} aria-controls="story-content">{expanded ? "Hide detailed walkthrough ↑" : "See how Apollo found this song →"}</button>
+      {expanded && <div id="story-content">
+      <label className="story-mobile-select">Recognition stage <select ref={mobileStepRef} value={step} onChange={(event) => goTo(Number(event.target.value))}>{STEPS.map((title, index) => <option key={title} value={index}>{index + 1}. {title}</option>)}</select></label>
+      <nav className="story-steps" aria-label="Recognition stages" onKeyDown={(event) => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); const next = Math.max(0, Math.min(STEPS.length - 1, step + (event.key === "ArrowRight" ? 1 : -1))); goTo(next); window.requestAnimationFrame(() => document.querySelectorAll<HTMLButtonElement>(".story-step")[next]?.focus()); } }}>{STEPS.map((title, index) => <button key={title} ref={index === 0 ? firstStepRef : undefined} type="button" className={`story-step ${step === index ? "story-step--active" : ""}`} onClick={() => goTo(index)} aria-current={step === index ? "step" : undefined}><span>{String(index + 1).padStart(2, "0")}</span>{title}</button>)}</nav>
+      <div className="story-step-rail" aria-hidden="true"><span style={{ width: `${step / (STEPS.length - 1) * 100}%` }} /></div>
       <div className="story-body">
-        <div className="story-visual">
+        <div className="story-visual" key={`visual-${step}`}>
           <div className="story-visual-head"><span>{String(step + 1).padStart(2, "0")} / {STEPS[step]}</span><span>RECORDING {seconds(cursor)} / {seconds(explanation.queryDurationSeconds)}</span></div>
           {step === 0 && <WaveformEnvelope points={explanation.waveformEnvelope} duration={explanation.queryDurationSeconds} cursor={cursor} />}
           {step === 1 && <SpectrogramCanvas spectrogram={explanation.spectrogram} cursorSeconds={cursor} frequencyBand={{ minimum: config.minimumFrequencyHz, maximum: config.maximumFrequencyHz }} />}
-          {step === 2 && <ConstellationPlot peaks={explanation.peaks} durationSeconds={explanation.queryDurationSeconds} maximumFrequencyHz={explanation.spectrogram.maximumFrequencyHz} cursorSeconds={cursor} />}
+          {step === 2 && <><button type="button" className="overlay-toggle" onClick={() => setOverlayPeaks(!overlayPeaks)} aria-pressed={overlayPeaks}>{overlayPeaks ? "Peaks only" : "Show spectrogram behind peaks"}</button>{overlayPeaks ? <SpectrogramCanvas spectrogram={explanation.spectrogram} cursorSeconds={cursor} overlayPeaks={explanation.peaks} frequencyBand={{ minimum: config.minimumFrequencyHz, maximum: config.maximumFrequencyHz }} /> : <ConstellationPlot peaks={explanation.peaks} durationSeconds={explanation.queryDurationSeconds} maximumFrequencyHz={explanation.spectrogram.maximumFrequencyHz} cursorSeconds={cursor} />}</>}
           {step === 3 && <PairPlot pairs={explanation.pairExamples} duration={explanation.queryDurationSeconds} maximumFrequency={config.maximumFrequencyHz} cursor={cursor} />}
-          {step === 4 && <div className="lookup-visual"><div className="lookup-node"><span>QUERY</span><strong>{explanation.counts.lookupFingerprints.toLocaleString()}</strong><small>fingerprints checked</small></div><div className="lookup-path" aria-hidden="true"><span>version {config.fingerprintVersion} + hash</span><i /></div><div className="lookup-node lookup-node--catalog"><span>CATALOG INDEX</span><strong>{explanation.counts.matchingHashes.toLocaleString()}</strong><small>distinct hashes found</small></div><p>Matching hashes are candidate evidence. The next step checks whether their times agree.</p></div>}
-          {step === 5 && <FingerprintAlignment matches={explanation.matchedFingerprints} queryDurationSeconds={explanation.queryDurationSeconds} sourceInterval={explanation.sourceInterval} cursorSeconds={cursor} />}
+          {step === 4 && <div className="lookup-visual"><div className="lookup-node"><span>QUERY</span><strong>{Math.round(explanation.counts.lookupFingerprints * lookupFraction).toLocaleString()}</strong><small>fingerprints checked</small></div><div className="lookup-path" aria-hidden="true"><span>version {config.fingerprintVersion} + hash</span><i /><em>◆ ◆ ◆</em></div><div className="lookup-node lookup-node--catalog"><span>CATALOG INDEX</span><strong>{Math.round(explanation.counts.matchingHashes * lookupFraction).toLocaleString()}</strong><small>distinct hashes found</small></div><p>The animated progress is illustrative; the final totals are measured. A hash hit is only candidate evidence. The next step checks whether times agree.</p></div>}
+          {step === 5 && <FingerprintAlignment matches={explanation.matchedFingerprints} queryDurationSeconds={explanation.queryDurationSeconds} sourceInterval={explanation.sourceInterval} cursorSeconds={cursor} waveformEnvelope={explanation.waveformEnvelope} />}
           {step === 6 && <VoteHistogram votes={explanation.decision.clusteredOffsetVotes} threshold={explanation.decision.minimumVotes} timestampSeconds={explanation.decision.leadingOffsetSeconds} accepted={recognition.matched} />}
           <div className="story-clip-track" aria-hidden="true"><span style={{ width: `${Math.min(100, cursor / stepDuration * 100)}%` }} /></div>
         </div>
-        <aside className="story-detail"><p className="story-detail-index">STEP {String(step + 1).padStart(2, "0")} / 07</p><h3>{STEPS[step]}</h3><p className="story-summary">{detail.summary}</p><div className="story-measure"><span>FROM THIS RECORDING</span><strong>{detail.measure}</strong></div>
-          {step === 6 && explanation.candidateVotes.length > 0 && <div className="candidate-list" aria-label="Leading catalog candidates">{explanation.candidateVotes.map((candidate) => <div key={candidate.songName}><span>{candidate.songName}</span><strong>{candidate.votes} votes</strong></div>)}</div>}
+        <aside className="story-detail" key={`detail-${step}`}><p className="story-detail-index">STEP {String(step + 1).padStart(2, "0")} / 07</p><h3>{STEPS[step]}</h3><p className="story-summary">{detail.summary}</p><div className="story-measure"><span>FROM THIS RECORDING</span><strong>{detail.measure}</strong></div>
+          {step === 6 && <><ul className="decision-rules"><li>{explanation.decision.leadingVotes >= explanation.decision.minimumVotes ? "✓" : "×"} At least {explanation.decision.minimumVotes} votes: {explanation.decision.leadingVotes}</li><li>{explanation.decision.leadingVotes > 0 && explanation.decision.leadingVotes >= explanation.decision.runnerUpVotes * explanation.decision.minimumWinnerRatio ? "✓" : "×"} {explanation.decision.minimumWinnerRatio}× best other song: {explanation.decision.runnerUpVotes}</li><li>{explanation.decision.leadingOffsetSeconds !== null ? "✓" : "×"} Nonnegative source offset</li></ul>{explanation.candidateVotes.length > 0 && <div className="candidate-list" aria-label="Leading catalog candidates">{explanation.candidateVotes.map((candidate, index) => <div key={candidate.songName}><span>{index + 1}. {candidate.songName}</span><strong>{candidate.votes} votes</strong><i style={{ width: `${candidate.votes / Math.max(explanation.decision.leadingVotes, 1) * 100}%` }} /></div>)}</div>}</>}
           <button className="technical-toggle" type="button" onClick={() => setShowTechnical((current) => !current)} aria-expanded={showTechnical}>{showTechnical ? "Hide technical detail −" : "Show technical detail +"}</button>{showTechnical && <p className="technical-copy">{detail.technical}</p>}
         </aside>
       </div>
@@ -251,6 +273,7 @@ export default function RecognitionExplanation({ response, recordingUrl }: { res
       <label className="story-scrub">Replay position <input type="range" min="0" max={totalDuration - .001} step="0.01" value={progress} onChange={(event) => { audioRef.current?.pause(); setPlaying(false); setReplayPosition(Number(event.target.value)); }} /></label>
       {step <= 3 && <label className="story-scrub story-scrub--cursor">Inspect recording time <input type="range" min="0" max={stepDuration - .001} step="0.01" value={progress % stepDuration} onChange={(event) => { audioRef.current?.pause(); setPlaying(false); setReplayPosition(step * stepDuration + Number(event.target.value)); }} /><output>{seconds(cursor)}</output></label>}
       {reducedMotion && <p className="story-motion-note">Animation is paused because your device requests reduced motion. Every stage remains available with the step controls.</p>}
+      </div>}
     </section>
   );
 }
