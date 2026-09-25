@@ -1,8 +1,8 @@
 # Apollo presentation: Person A speech and cues
 
-This follows the two-person **6-minute presentation and demonstration** plan in the supplied image. Person A owns shared slides **1, 2, 3, 4 and 6**, Demo 1, and Demo 2. Person B owns slide 5, the class-mode replay, slide 7, the cover demo and slide 8. Timings below are **wall-clock targets**, including switching screens. Rehearse with the actual projector and clips; speak naturally rather than reading every word.
+This follows the two-person **6-minute presentation and demonstration** plan in the supplied image. Person A owns shared slides **1, 2, 3, 4, 5, 6 and 8**, Demo 1, and Demo 2. Person B owns slide 7, the class-mode replay, slide 9, the cover demo and slide 10. Timings below are **wall-clock targets**, including switching screens. Rehearse with the actual projector and clips; speak naturally rather than reading every word.
 
-The `.tex` deck contains only Person A's five slides. Before submission, replace `\TeamNames` with both presenters' real names and merge these frames into the shared deck in slide-number order. Slide 3 has **one click** to change the waveform view into the spectrogram view; this creates two PDF pages for one speaking segment. The other slides have no animation.
+The `.tex` deck contains only Person A's seven slides (was five; now includes the motivation and windowing slides). Before submission, replace `\TeamNames` with both presenters' real names and merge these frames into the shared deck in slide-number order. Slide 5 has **one click** to change the waveform view into the spectrogram view; this creates two PDF pages for one speaking segment. The other slides have no animation.
 
 ## 0:00–0:20 — Slide 1: Apollo / the problem
 
@@ -16,27 +16,39 @@ The `.tex` deck contains only Person A's five slides. Before submission, replace
 
 **Say while it listens:** “The browser is painting the sound as a sky: time moves across, frequency goes up, and bright stars mark strong local frequency spots. The answer comes from the server's fingerprint search, not from this drawing.”
 
-**When the title appears:** “It found the title and the source moment. Let's see the path from audio to this answer.” Return to slide 2. If the title has not appeared by the 15-second limit, state that the live clip was not confirmed and continue; do not spend the entire presentation troubleshooting.
+**When the title appears:** “It found the title and the source moment. Let's see the path from audio to this answer.” Move to slide 2. If the title has not appeared by the 15-second limit, state that the live clip was not confirmed and continue; do not spend the entire presentation troubleshooting.
 
-## 0:45–1:05 — Slide 2: architecture
+## 0:45–0:55 — Slide 2: motivation
+
+**Say (about 10 seconds):** “Three things break raw comparison. The microphone starts at an unknown point. Background noise corrupts amplitudes. And every device records at a different loudness. We need features that survive all three.”
+
+**Point to:** The three obstacle rows left to right, then the question mark. Do not linger; this slide motivates the next one.
+
+## 0:55–1:15 — Slide 3: architecture
 
 **Say (about 19 seconds):** “Follow the arrows. The browser captures the microphone or a tab as a mono WAV clip. Next.js proxies the request to FastAPI, which validates the audio and calls our Python signal code. That code compares fingerprints through an indexed SQLite catalog. The result returns to the page as a song title and source time.”
 
 **Point to:** The four dark boxes from left to right, then the green return arrow. Avoid explaining file names on screen; answer those in Q&A if asked.
 
-## 1:05–1:40 — Slide 3: sampling and STFT
+## 1:15–1:30 — Slide 4: windowing and FFT
+
+**Say (about 14 seconds):** "Before we see the spectrogram, here is what happens inside one window. We multiply the signal by a bell-shaped Hann window — this avoids sharp edges that create false frequencies. Then the FFT of that windowed slice tells us which frequencies are strong right now. One window gives one column of the spectrogram."
+
+**Point to:** The Hann window shape, the tapered product signal, and the FFT peak. Stress that this is one slice; repeating it produces the full spectrogram on the next slide.
+
+## 1:30–2:00 — Slide 5: sampling and STFT
 
 **Say (about 30 seconds):** “This first view is a real recording from Apollo. We make both the song and the query mono, normalize their peaks and resample to 22,050 samples per second, so they use the same frequency grid. [Click once.] Now you see the spectrogram for that recording. We split the wave into 2,048-sample windows, about 93 milliseconds, and move forward 512 samples each time. The STFT measures frequency strength in every window. Each window becomes one vertical column: time runs across, frequency runs up.”
 
 **Point to:** The real waveform, then click to the real spectrogram. Trace one vertical column and then the time axis. The spectrum screenshot is cropped to the graph; its original side explanation is intentionally absent.
 
-## 1:40–2:00 — Slide 4: peaks
+## 2:00–2:20 — Slide 6: peaks
 
 **Say (about 17 seconds):** “This is the same recording with peaks over its spectrogram. Each dot is a strong frequency at one moment. Apollo keeps local maxima in 15-by-9 neighborhoods, between 100 hertz and 5 kilohertz, capped at 60 per second. Gold dots later supported the winning match.”
 
 **Hand off to Person B:** “Now [teammate name] will show how pairs of landmarks become a match.” Person B begins shared slide 5 at **2:00**.
 
-## 3:15–3:25 — Slide 6: speed search
+## 3:15–3:25 — Slide 8: speed search
 
 **Come back after Person B's replay segment. Say (about 9 seconds):** “Speed edits change both pitch and timing; pitch-only edits change just pitch. We try 78 corrections on the detected peaks, then use our normal fingerprint matcher.”
 

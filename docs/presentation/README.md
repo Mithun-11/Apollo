@@ -1,11 +1,11 @@
 # Person A slides
 
-`person_a_slides.tex` contains five shared-deck slides. Slide 3 has one overlay, so its PDF has six pages.
+`person_a_slides.tex` contains seven shared-deck slides (was five; motivation and windowing slides added). Slide 5 has one overlay, so its PDF has eight pages.
 
 ## Use in Prism
 
 1. Upload `person_a_slides.tex` as `main.tex`.
-2. Upload the `images` folder with its three PNG files: `capture.png`, `spectrum.png`, and `peaks.png`. Keep the folder name `images`.
+2. Upload the `images` folder with its five PNG/JPG files: `capture.png`, `spectrum.png`, `peaks.png`, `motivation.jpg`, and `windowing_fft.jpg`. Keep the folder name `images`.
 3. Select **pdfLaTeX** or **XeLaTeX** and compile. No extra fonts are needed.
 4. Replace `\TeamNames` in the source with your actual names.
 

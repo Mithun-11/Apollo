@@ -46,7 +46,21 @@
   \vspace{8mm}
 \end{frame}
 
-% Shared slide 2: architecture, 0:45-1:05.
+% Slide 2: motivation / why not compare waveforms directly.
+\begin{frame}{Why can't we just compare waveforms?}
+  \vspace{2mm}
+  \begin{center}
+  \includegraphics[height=5.8cm]{motivation.jpg}\par
+  \end{center}
+  \vspace{2mm}
+  {\large\bfseries\color{teal}We need features that survive these distortions.}
+  \vspace{2mm}
+
+  {\color{soft}Matching raw samples fails: the start is unknown, noise changes amplitudes,
+  and every recording device has a different gain.}
+\end{frame}
+
+% Shared slide 3: architecture, 0:45-1:05.
 \begin{frame}{How a clip becomes an answer}
   \vspace{6mm}
   \begin{center}
@@ -64,7 +78,24 @@
   {\color{soft}Signal code builds fingerprints; SQLite searches an indexed catalog.}
 \end{frame}
 
-% Shared slide 3, overlay 1: capture and standardize.
+% Slide 4: windowing and FFT — what one window reveals.
+\begin{frame}{Windowing: one window, one frequency snapshot}
+  \vspace{1mm}
+  \begin{center}
+  \includegraphics[height=5.6cm]{windowing_fft.jpg}\par
+  \end{center}
+  \vspace{2mm}
+  {\small A \textbf{Hann window} tapers the edges so the FFT does not see
+  an abrupt cut. Multiplying the signal by the window and computing the FFT
+  gives one column of the spectrogram: \emph{which frequencies are strong
+  right now}.}
+  \vspace{1mm}
+
+  {\color{soft}Apollo uses a 2,048-sample window (\raise.17ex\hbox{$\scriptstyle\sim$}93\,ms)
+  and slides it 512 samples at a time (75\%\ overlap).}
+\end{frame}
+
+% Shared slide 5, overlay 1: capture and standardize.
 \begin{frame}{From sound to spectrogram}
 \only<1>{%
   {\bfseries\color{teal}1 / 2\quad Capture the waveform}\hfill
@@ -83,7 +114,7 @@
 }
 \end{frame}
 
-% Shared slide 4: real peak map, 1:40-2:00.
+% Shared slide 6: real peak map, 2:00-2:20.
 \begin{frame}[t]{Keep strong local peaks}
   \begin{center}
   {\bfseries\color{teal}Each dot marks one frequency at one moment.}\par\vspace{2mm}
@@ -94,7 +125,7 @@
   \end{center}
 \end{frame}
 
-% Shared slide 6: speed search, 3:15-3:25.
+% Shared slide 8: speed search, 3:15-3:25.
 \begin{frame}{How Apollo handles edited audio}
   \vspace{4mm}
   \renewcommand{\arraystretch}{1.8}
