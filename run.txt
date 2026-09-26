@@ -1,6 +1,21 @@
-cd d:\term-project\2_2\Apollo\backend
-.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --port 8000
+macOS/Linux: open two terminals at the Apollo project root.
 
-cd d:\term-project\2_2\Apollo\frontend
+Terminal 1 (backend):
+cd backend
+source .venv/bin/activate
+python -m uvicorn app.main:app --reload --port 8000
+
+Terminal 2 (frontend, from the project root):
+cd frontend
+npm run dev
+
+Windows PowerShell: open two terminals at the Apollo project root.
+
+Terminal 1 (backend):
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --reload --port 8000
+
+Terminal 2 (frontend, from the project root):
+cd frontend
 npm run dev
