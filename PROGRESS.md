@@ -8,6 +8,16 @@ Last updated: 2026-09-24. Current release is v3.
 
 ## Current state at a glance
 
+Spotify playback integration (2026-09-26): the result button now connects Spotify with PKCE
+in a popup and starts the catalog track with the detected source timestamp in `position_ms`.
+All Spotify requests and token refreshes run only on a button click. Recognition, microphone,
+explanation and replay code are unchanged. Requires the frontend Spotify Client ID/redirect URI
+configuration and an active Premium playback device; see `frontend/README.md`.
+Nine mocked API tests cover timestamp playback, refresh, state validation and playback errors.
+Live Spotify playback remains to be verified with the user's developer app/account.
+Recognition timings were not remeasured: the prior fake-mic harness/clips are not available in
+this workspace; existing time budgets still apply.
+
 | Area | State |
 |---|---|
 | Fingerprints | `fingerprint_version = "3"` in `backend/app/services/signal.py` (`SignalConfig`) |

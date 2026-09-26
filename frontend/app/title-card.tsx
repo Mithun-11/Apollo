@@ -1,11 +1,6 @@
 import type { RecognitionResponse } from "../lib/api";
 import { formatClock } from "./replay/data";
-
-/** Spotify's own links accept a start time after "#", as minutes:seconds. */
-export function spotifyAt(url: string, seconds: number | null): string {
-  if (seconds === null) return url;
-  return `${url.split("#")[0]}#${formatClock(seconds)}`;
-}
+import SpotifyPlay from "./spotify-play";
 
 export function describeEdit({ speedFactor, pitchFactor }: RecognitionResponse): string | null {
   if (speedFactor && Math.abs(speedFactor - 1) >= 0.02) {
@@ -63,9 +58,7 @@ export default function TitleCard({ recognition, waiting = false, preparing = fa
           Class mode
         </button>
         {matched && recognition.song ? (
-          <a className="action" href={spotifyAt(recognition.song.spotifyUrl, recognition.timestampSeconds)} target="_blank" rel="noreferrer">
-            Play on Spotify at {formatClock(recognition.timestampSeconds ?? 0)}
-          </a>
+          <SpotifyPlay spotifyUrl={recognition.song.spotifyUrl} seconds={recognition.timestampSeconds} />
         ) : null}
         {preparing ? null : (
           <button type="button" className="action action-quiet" onClick={onHome}>
